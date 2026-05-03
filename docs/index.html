@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- CHANGE: Update this to your project title -->
+  <title>Identification of genetic biomarkers associated with overall survival across treatment mechanisms of action in metastatic colorectal cancer patients</title>
+
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- ═══════════════════════════════════════════════
+       NAVIGATION BAR
+       CHANGE: Update the links if you add/remove sections
+  ════════════════════════════════════════════════ -->
+  <nav>
+    <a class="nav-brand" href="#">ID of Genomic Biomarkers in metastatic CRC OS</a>
+    <ul class="nav-links">
+      <li><a href="#about">About</a></li>
+      <li><a href="#methods">Methods</a></li>
+      <li><a href="#results">Results</a></li>
+    </ul>
+  </nav>
+
+
+  <!-- ═══════════════════════════════════════════════
+       HERO — the big banner at the top
+       CHANGE: Everything in this section
+  ════════════════════════════════════════════════ -->
+  <div class="hero">
+
+    <!-- Small label above the title -->
+    <span class="tag"> MSK-CHORD · 2026</span>
+
+    <!-- Your project title -->
+    <h1>Identification of genetic biomarkers associated with overall survival across treatment mechanisms of action in metastatic colorectal cancer patients</h1>
+
+    <!-- One or two sentences. What data, what question, what did you find? -->
+    <p class="subtitle">
+      I identified genomic biomarkers that were associated with survival by treatment mechanism of action in metastatic colorectal cancer patients from the MSK-CHORD
+      cohort, and found that PIK3CA mutations with chemotherapy in the late period were significantly associated.
+    </p>
+
+    <!-- Update the href links. Delete any buttons you don't need. -->
+    <!-- report.pdf should be in your docs/ folder -->
+    <!-- Your code should be in a folder called analysis/ next to the docs folder -->
+    <div class="hero-actions">
+      <a href="Preliminary Project Report (1).pdf"             class="btn-primary" >Read report</a>
+      <a href="https://github.com/raoMedha/BIOSTAT_629"  class="btn-outline" target="_blank">Code</a>
+      <a href="https://cbioportal.org"  class="btn-outline" target="_blank">Data</a>
+    </div>
+
+  </div>
+
+
+  <main>
+
+    <!-- ═══════════════════════════════════════════════
+         ABOUT — describe your dataset and question
+         CHANGE: Replace the placeholder text
+    ════════════════════════════════════════════════ -->
+    <section id="about">
+      <div class="container">
+        <h2>About</h2>
+
+        <!-- Describe your cohort and research question -->
+        <p>
+          The MSK-CHORD cohort includes 5,543 colorectal cancer patients. We focused on metastatic colorectal cancer patients.
+        </p>
+        <p>
+          Our primary outcome was overall survival.
+          We included patients who were diagnosed with metastatic colorectal cancer and started a first-line treatment within 30 days of diagnosis. Patients with missing overall survival status were dropped. Additionally, patients with missing MSI scores and missing TMB scores were dropped. 
+        </p>
+      </div>
+    </section>
+
+
+    <!-- ═══════════════════════════════════════════════
+         METHODS
+         CHANGE: Describe your model and approach
+    ════════════════════════════════════════════════ -->
+    <section id="methods">
+      <div class="container">
+        <h2>Methods</h2>
+
+        <!-- Describe your statistical model -->
+        <!-- Will be different for every project! -->
+        <p>
+          We fit Cox proportional hazards
+          with the following covariates: gene of interest, mechanism of action (MoA) group, interaction between gene and MoA, MSI score, TMB, race, sex, and highest stage of cancer recorded.
+          Analysis was performed in R using the survival package.
+        </p>
+
+        <!-- Add or remove items from this list -->
+        <ul>
+          <li>Primary outcome: overall survival</li>
+          <li>Model: Cox proportional hazards</li>
+          <li>Covariates: age, sex, race, stage, MSI score, TMB, gene mutation, MoA, gene x MoA interaction</li>
+          <li>Software: R version 4.5.2</li>
+        </ul>
+      </div>
+    </section>
+
+
+    <!-- ═══════════════════════════════════════════════
+         RESULTS — your figures go here
+         CHANGE: Update figure filenames, captions, and findings
+         Put your figure files in the docs/figures/ folder
+    ════════════════════════════════════════════════ -->
+    <section id="results">
+      <div class="container">
+        <h2>Results</h2>
+
+        <div class="fig-grid">
+
+          <!-- Figure 1 -->
+          <figure>
+            <!-- One sentence: what does this figure show? -->
+            <p class="fig-finding">
+              This forest plot shows the interaction hazard ratios, with a reference group of simple chemotherapy. We can see that a few gene x MoA interactions were significant prior to the FDR correction. 
+            </p>
+            <!-- Update the src to your actual figure filename -->
+            <img src="figures/ForestPlotPNG.png"
+                 alt="Forest Plot of interaction hazard ratios between gene mutation and mechanism of action group">
+            <!-- Write a proper figure caption -->
+            <figcaption>
+              <strong>Figure 1.</strong> Forest plot of gene x treatment interaction HRs (reference group = chemotherapy). n = 1,305. 
+            </figcaption>
+          </figure>
+
+          <!-- Figure 2 — delete this block if you only have one figure -->
+          <figure>
+            <p class="fig-finding">
+              We can see that the PIK3CA gene mutation nominally has a worse overall survival compared to wildtype across treatment MoA group. 
+            </p>
+            <img src="figures/KPPlotPNG.png"
+                 alt="              We can see that the PIK3CA gene mutation nominally has a worse overall survival compared to wildtype across treatment MoA group. 
+">
+            <figcaption>
+              <strong>Figure 2.</strong> Kaplan-Meier Curve for PIK3CA gene mutation and wildtype by treatment MoA group. 
+            </figcaption>
+          </figure>
+
+        </div>
+      </div>
+    </section>
+
+
+    <!-- ═══════════════════════════════════════════════
+         TEAM — list your authors
+         CHANGE: Replace with your actual names
+    ════════════════════════════════════════════════ -->
+    <section id="team">
+      <div class="container">
+        <h2>Team</h2>
+        <ul>
+          <li>Medha Rao · University of Michigan</li>
+        </ul>
+      </div>
+    </section>
+
+  </main>
+
+
+  <!-- ═══════════════════════════════════════════════
+       FOOTER
+       CHANGE: Update your contact email
+       Do NOT remove the data access note — MSK-CHORD is controlled access
+  ════════════════════════════════════════════════ -->
+  <footer>
+    <p>
+      Patient-level MSK-CHORD data are available through
+      <a href="https://cbioportal.org">cBioPortal</a>
+      under controlled access. Analysis code is freely available.
+    </p>
+    <p>
+      Questions? <a href="mailto:medharao@umich.edu">medharao@umich.edu</a>
+    </p>
+  </footer>
+
+</body>
+</html>

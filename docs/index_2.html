@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Medha Rao · Research Portfolio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Source+Sans+3:wght@300;400;600&display=swap" rel="stylesheet">
+  <style>
+    /* ─── TOKENS ──────────────────────────────────────────── */
+    :root {
+      --navy:       #13294B;
+      --navy-mid:   #1e3f6f;
+      --carolina:   #4B9CD3;
+      --carolina-lt:#daeef9;
+      --maize:      #FFCB05;
+      --maize-dk:   #e0a800;
+      --white:      #ffffff;
+      --off-white:  #f5f7fa;
+      --text:       #1a1a2e;
+      --text-muted: #5a6478;
+      --border:     #d8e4ef;
+
+      --serif:  'Libre Baskerville', Georgia, serif;
+      --sans:   'Source Sans 3', system-ui, sans-serif;
+
+      --radius: 6px;
+      --shadow: 0 2px 16px rgba(19,41,75,0.10);
+    }
+
+    /* ─── RESET ───────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: var(--sans);
+      font-size: 16px;
+      line-height: 1.7;
+      color: var(--text);
+      background: var(--white);
+    }
+    a { color: var(--carolina); text-decoration: none; }
+    a:hover { color: var(--navy); text-decoration: underline; }
+    img { max-width: 100%; height: auto; display: block; border-radius: var(--radius); }
+
+    /* ─── NAV ─────────────────────────────────────────────── */
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: var(--navy);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 2.5rem;
+      height: 56px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    }
+    .nav-brand {
+      font-family: var(--serif);
+      font-size: 1rem;
+      color: var(--maize);
+      font-weight: 700;
+      letter-spacing: 0.01em;
+    }
+    .nav-brand:hover { color: var(--white); text-decoration: none; }
+    .nav-links {
+      list-style: none;
+      display: flex;
+      gap: 0.25rem;
+    }
+    .nav-links a {
+      color: rgba(255,255,255,0.75);
+      font-size: 0.85rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding: 0.4rem 0.75rem;
+      border-radius: 4px;
+      transition: background 0.18s, color 0.18s;
+    }
+    .nav-links a:hover {
+      background: rgba(75,156,211,0.2);
+      color: var(--white);
+      text-decoration: none;
+    }
+
+    /* ─── HERO ────────────────────────────────────────────── */
+    .hero {
+      background: linear-gradient(135deg, var(--navy) 0%, var(--navy-mid) 60%, #205080 100%);
+      color: var(--white);
+      padding: 5rem 2.5rem 4rem;
+      position: relative;
+      overflow: hidden;
+    }
+    .hero::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 60% 50% at 80% 20%, rgba(75,156,211,0.18) 0%, transparent 70%),
+        radial-gradient(ellipse 40% 40% at 10% 90%, rgba(255,203,5,0.08) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .hero-inner {
+      max-width: 780px;
+      position: relative;
+    }
+    .hero-eyebrow {
+      display: inline-block;
+      background: var(--maize);
+      color: var(--navy);
+      font-family: var(--sans);
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      padding: 0.3rem 0.75rem;
+      border-radius: 3px;
+      margin-bottom: 1.25rem;
+    }
+    .hero h1 {
+      font-family: var(--serif);
+      font-size: clamp(1.75rem, 4vw, 2.8rem);
+      line-height: 1.25;
+      font-weight: 700;
+      margin-bottom: 1rem;
+    }
+    .hero-sub {
+      font-size: 1.05rem;
+      color: rgba(255,255,255,0.78);
+      max-width: 600px;
+      margin-bottom: 2rem;
+      font-weight: 300;
+      line-height: 1.65;
+    }
+    .hero-links {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+    .hero-links a {
+      font-size: 0.85rem;
+      font-weight: 600;
+      padding: 0.55rem 1.1rem;
+      border-radius: 4px;
+      transition: all 0.18s;
+      text-decoration: none;
+    }
+    .btn-ghost {
+      border: 1.5px solid rgba(255,255,255,0.4);
+      color: rgba(255,255,255,0.85);
+    }
+    .btn-ghost:hover {
+      border-color: var(--carolina);
+      color: var(--white);
+      background: rgba(75,156,211,0.15);
+    }
+
+    /* ─── PROJECT INDEX CARDS ─────────────────────────────── */
+    .project-index {
+      background: var(--off-white);
+      padding: 3.5rem 2.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .section-label {
+      font-family: var(--sans);
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--carolina);
+      margin-bottom: 0.5rem;
+    }
+    .project-index h2 {
+      font-family: var(--serif);
+      font-size: 1.5rem;
+      color: var(--navy);
+      margin-bottom: 2rem;
+    }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1.25rem;
+      max-width: 1100px;
+    }
+    .card {
+      background: var(--white);
+      border: 1px solid var(--border);
+      border-top: 4px solid var(--carolina);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+      box-shadow: var(--shadow);
+      transition: transform 0.2s, box-shadow 0.2s;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    .card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 8px 28px rgba(19,41,75,0.14);
+    }
+    .card-num {
+      font-family: var(--serif);
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--carolina-lt);
+      line-height: 1;
+    }
+    .card h3 {
+      font-family: var(--serif);
+      font-size: 1rem;
+      color: var(--navy);
+      line-height: 1.4;
+    }
+    .card p {
+      font-size: 0.88rem;
+      color: var(--text-muted);
+      line-height: 1.6;
+      flex: 1;
+    }
+    .card-meta {
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      border-top: 1px solid var(--border);
+      padding-top: 0.75rem;
+    }
+    .card-link {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--carolina);
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+    }
+    .card-link::after { content: ' →'; }
+    .card-link:hover { color: var(--navy); text-decoration: none; }
+
+    /* ─── SHARED SECTION CHROME ───────────────────────────── */
+    .project-section {
+      padding: 4rem 2.5rem;
+    }
+    .project-section:nth-child(even) {
+      background: var(--off-white);
+    }
+    .project-header {
+      max-width: 860px;
+      margin-bottom: 2.5rem;
+      padding-bottom: 1.5rem;
+      border-bottom: 2px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .project-header .proj-num {
+      font-family: var(--serif);
+      font-size: 3rem;
+      font-weight: 700;
+      color: var(--carolina-lt);
+      line-height: 1;
+      margin-bottom: 0.25rem;
+    }
+    .project-header h2 {
+      font-family: var(--serif);
+      font-size: clamp(1.25rem, 2.5vw, 1.75rem);
+      color: var(--navy);
+      line-height: 1.3;
+      max-width: 760px;
+    }
+    .project-header .subtitle {
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      max-width: 680px;
+    }
+    .project-header .proj-tags {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      margin-top: 0.25rem;
+    }
+    .tag {
+      background: var(--carolina-lt);
+      color: var(--navy);
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      padding: 0.25rem 0.6rem;
+      border-radius: 3px;
+    }
+    .tag-maize {
+      background: var(--maize);
+      color: var(--navy);
+    }
+    .proj-actions {
+      display: flex;
+      gap: 0.6rem;
+      flex-wrap: wrap;
+      margin-top: 0.5rem;
+    }
+    .btn-primary {
+      background: var(--navy);
+      color: var(--white);
+      font-size: 0.82rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      padding: 0.5rem 1rem;
+      border-radius: 4px;
+      transition: background 0.18s;
+    }
+    .btn-primary:hover { background: var(--navy-mid); color: var(--white); text-decoration: none; }
+    .btn-outline {
+      border: 1.5px solid var(--border);
+      color: var(--text-muted);
+      font-size: 0.82rem;
+      font-weight: 600;
+      padding: 0.5rem 1rem;
+      border-radius: 4px;
+      transition: border-color 0.18s, color 0.18s;
+    }
+    .btn-outline:hover { border-color: var(--carolina); color: var(--carolina); text-decoration: none; }
+
+    /* ─── PROJECT SUBSECTIONS ─────────────────────────────── */
+    .proj-body {
+      max-width: 860px;
+      display: grid;
+      gap: 2.5rem;
+    }
+    .subsection h3 {
+      font-family: var(--serif);
+      font-size: 1.1rem;
+      color: var(--navy);
+      margin-bottom: 0.75rem;
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+    .subsection h3::before {
+      content: '';
+      display: inline-block;
+      width: 14px;
+      height: 3px;
+      background: var(--maize);
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+    .subsection p {
+      color: var(--text);
+      margin-bottom: 0.6rem;
+    }
+    .subsection ul {
+      list-style: none;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+    .subsection ul li {
+      font-size: 0.92rem;
+      color: var(--text-muted);
+      padding-left: 1.1rem;
+      position: relative;
+    }
+    .subsection ul li::before {
+      content: '▸';
+      position: absolute;
+      left: 0;
+      color: var(--carolina);
+      font-size: 0.7rem;
+      top: 0.2em;
+    }
+
+    /* ─── FIGURES ─────────────────────────────────────────── */
+    .fig-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+      gap: 2rem;
+    }
+    figure {
+      background: var(--white);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      box-shadow: var(--shadow);
+    }
+    .fig-finding {
+      padding: 1rem 1.25rem 0.75rem;
+      font-size: 0.92rem;
+      color: var(--text-muted);
+      border-left: 3px solid var(--maize);
+      margin: 1rem 1rem 0;
+      background: #fffdf0;
+      border-radius: 3px;
+    }
+    figure img {
+      margin: 1rem;
+      width: calc(100% - 2rem);
+      border-radius: 4px;
+    }
+    figcaption {
+      padding: 0.75rem 1.25rem 1rem;
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      border-top: 1px solid var(--border);
+      line-height: 1.5;
+    }
+
+    /* ─── PLACEHOLDER ─────────────────────────────────────── */
+    .placeholder-box {
+      background: var(--carolina-lt);
+      border: 2px dashed var(--carolina);
+      border-radius: var(--radius);
+      padding: 2rem;
+      text-align: center;
+      color: var(--navy);
+    }
+    .placeholder-box p {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      margin-top: 0.5rem;
+    }
+
+    /* ─── TEAM / FOOTER ───────────────────────────────────── */
+    #team {
+      background: var(--navy);
+      color: var(--white);
+      padding: 3rem 2.5rem;
+    }
+    #team .section-label { color: var(--maize); }
+    #team h2 {
+      font-family: var(--serif);
+      font-size: 1.4rem;
+      color: var(--white);
+      margin-bottom: 1rem;
+    }
+    #team ul { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+    #team li { color: rgba(255,255,255,0.8); font-size: 0.95rem; }
+
+    footer {
+      background: #0c1f38;
+      color: rgba(255,255,255,0.5);
+      text-align: center;
+      padding: 1.75rem 2rem;
+      font-size: 0.82rem;
+      line-height: 1.7;
+    }
+    footer a { color: var(--carolina); }
+    footer a:hover { color: var(--white); }
+
+    /* ─── RESPONSIVE ──────────────────────────────────────── */
+    @media (max-width: 640px) {
+      nav { padding: 0 1.25rem; }
+      .nav-links { display: none; }
+      .hero, .project-index, .project-section { padding-left: 1.25rem; padding-right: 1.25rem; }
+      .fig-grid { grid-template-columns: 1fr; }
+      #team { padding: 2rem 1.25rem; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ── NAV ────────────────────────────────────────────── -->
+  <nav>
+    <a class="nav-brand" href="#">Medha Rao</a>
+    <ul class="nav-links">
+      <li><a href="#projects">Projects</a></li>
+      <li><a href="#project-1">Treatments and Genomic Biomarkers</a></li>
+      <li><a href="#project-2">Somatic PRS</a></li>
+      <li><a href="#project-3">Gout Classification (NLP)</a></li>
+      <li><a href="#team">About</a></li>
+    </ul>
+  </nav>
+
+
+  <!-- ── HERO ───────────────────────────────────────────── -->
+  <div class="hero">
+    <div class="hero-inner">
+      <span class="hero-eyebrow">Research Portfolio</span>
+      <h1>Medha Rao</h1>
+      <p class="hero-sub">
+        Research regarding tumor genomic biomarkers, survival outcomes, treatment heterogeneity, metastasis risk in oncology, and gout identification from chief complaint notes.
+      </p>
+      <div class="hero-links">
+        <a href="https://github.com/raoMedha" class="btn-ghost" target="_blank">GitHub</a>
+        <a href="mailto:medharao@umich.edu" class="btn-ghost">Contact</a>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ── PROJECT INDEX ──────────────────────────────────── -->
+  <section class="project-index" id="projects">
+    <p class="section-label">Research</p>
+    <h2>Projects</h2>
+    <div class="cards">
+
+      <div class="card">
+        <div class="card-num">01</div>
+        <h3>Genetic Biomarkers &amp; Overall Survival in Metastatic CRC</h3>
+        <p>Identified genomic biomarkers associated with survival by treatment mechanism of action in metastatic colorectal cancer using the MSK-CHORD cohort.</p>
+        <div class="card-meta">MSK-CHORD · Cox PH · Precision Oncology</div>
+        <a href="#project-1" class="card-link">View project</a>
+      </div>
+
+      <div class="card">
+        <div class="card-num">02</div>
+        <h3>Novel Framework for Somatic Polygenic Risk Scoring for Metastasis Stratification</h3>
+        <p>Created a novel framework for sPRS that stratifies metastasis risk using the MSK-CHORD dataset.</p>
+        <div class="card-meta">MSK-CHORD · Genomic Weighting · Precision Oncology</div>
+        <a href="#project-2" class="card-link">View project</a>
+      </div>
+
+      <div class="card">
+        <div class="card-num">03</div>
+        <h3>Identification of Gout from Emergency Department Chief Complaints </h3>
+        <p>Identified the best approach for gout identification from ED chief complaint texts and identified an optimal decision threshold using Gout ED Chief Complaint Corpora.</p>
+        <div class="card-meta">Gout Emergency Department Chief Complaint Corpora · Feature-based vs. Representation Learning · Clinical Alert Systems</div>
+        <a href="#project-3" class="card-link">View project</a>
+      </div>
+
+    </div>
+  </section>
+
+
+  <main>
+
+    <!-- ══════════════════════════════════════════════════════
+         PROJECT 1 — MSK-CHORD
+    ═══════════════════════════════════════════════════════ -->
+    <section class="project-section" id="project-1">
+
+      <div class="project-header">
+        <div class="proj-num">01</div>
+        <p class="section-label">MSK-CHORD · 2026</p>
+        <h2>Identification of genetic biomarkers associated with overall survival across treatment mechanisms of action in metastatic colorectal cancer patients</h2>
+        <p class="subtitle">
+          Genomic biomarkers associated with survival by treatment MoA in metastatic CRC: PIK3CA mutations with chemotherapy in the late period were significantly associated.
+        </p>
+        <div class="proj-tags">
+          <span class="tag">Survival Analysis</span>
+          <span class="tag">Genomics</span>
+          <span class="tag">mCRC</span>
+          <span class="tag tag-maize">Cox PH</span>
+        </div>
+        <div class="proj-actions">
+          <a href="ID_Tx_Biomarkers_Report.pdf" class="btn-primary">Read Report</a>
+          <a href="https://github.com/raoMedha/Website/Treatment_Biomarkers" class="btn-outline" target="_blank">Code</a>
+          <a href="https://cbioportal.org" class="btn-outline" target="_blank">Data</a>
+        </div>
+      </div>
+
+      <div class="proj-body">
+
+        <div class="subsection">
+          <h3>About</h3>
+          <p>The MSK-CHORD cohort includes 5,543 colorectal cancer patients. I focused on metastatic colorectal cancer patients.</p>
+          <p>The primary outcome was overall survival. I included patients who were diagnosed with metastatic colorectal cancer and started a first-line treatment within 30 days of diagnosis. Patients with missing overall survival status, MSI scores, or TMB scores were excluded.</p>
+        </div>
+
+        <div class="subsection">
+          <h3>Methods</h3>
+          <p>I fit Cox proportional hazards models with the following covariates: gene of interest, mechanism of action (MoA) group, interaction between gene and MoA, MSI score, TMB, race, sex, and highest stage of cancer recorded. Analysis was performed in R using the survival package.</p>
+          <ul>
+            <li>Primary outcome: overall survival</li>
+            <li>Model: Cox proportional hazards</li>
+            <li>Covariates: age, sex, race, stage, MSI score, TMB, gene mutation, MoA, gene × MoA interaction</li>
+            <li>Software: R version 4.5.2</li>
+          </ul>
+        </div>
+
+        <div class="subsection">
+          <h3>Results</h3>
+          <div class="fig-grid">
+
+            <figure>
+              <p class="fig-finding">
+                This forest plot shows interaction HRs relative to simple chemotherapy. Several gene × MoA interactions reached nominal significance before FDR correction.
+              </p>
+              <img src="figures/ForestPlotPNG.png"
+                   alt="Forest Plot of interaction hazard ratios between gene mutation and mechanism of action group">
+              <figcaption>
+                <strong>Figure 1.</strong> Forest plot of gene × treatment interaction HRs (reference = chemotherapy). n = 1,305.
+              </figcaption>
+            </figure>
+
+            <figure>
+              <p class="fig-finding">
+                PIK3CA mutation nominally shows worse overall survival compared to wildtype across all treatment MoA groups.
+              </p>
+              <img src="figures/KPPlotPNG.png"
+                   alt="Kaplan-Meier curve for PIK3CA mutation vs wildtype by treatment MoA group">
+              <figcaption>
+                <strong>Figure 2.</strong> Kaplan-Meier curves for PIK3CA mutation status by treatment MoA group.
+              </figcaption>
+            </figure>
+
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+
+    <!-- ══════════════════════════════════════════════════════
+         PROJECT 2 — PLACEHOLDER
+    ═══════════════════════════════════════════════════════ -->
+    <section class="project-section" id="project-2">
+
+      <div class="project-header">
+        <div class="proj-num">02</div>
+        <p class="section-label">MSK-CHORD · 2026</p>
+        <h2>Somatic Polygenic Risk Scoring: A Novel Framework for Metastasis Risk Stratification</h2>
+        <p class="subtitle">
+          sPRS: This proposed method for metastasis risk stratification through weighting of genomic variants in the tumor genomic landscape stratified metastisis risk into low, medium, and high risk by tertile.
+        </p>
+        <div class="proj-tags">
+          <span class="tag">Metastasis Risk</span>
+          <span class="tag">Genetic Variants</span>
+          <span class="tag tag-maize">Genetic Variant Weighting</span>
+        </div>
+        <div class="proj-actions">
+          <a href="sPRS_Report.pdf" class="btn-primary">Read Report</a>
+          <a href="https://github.com/raoMedha/Website/sPRS" class="btn-outline">Code</a>
+          <a href="https://cbioportal.org" class="btn-outline">Data</a>
+        </div>
+      </div>
+
+      <div class="proj-body">
+
+        <div class="subsection">
+          <h3>About</h3>
+          <p>The MSK-CHORD dataset sequenced 24,950 patients, of which 21,475 unique patients were used after selecting for patients with unique samples, and no missing race data. This method found that sPRS contstruction with regards to metastasis risk is possible and is significanlty associated with metastasis.</p>
+        </div>
+
+        <div class="subsection">
+          <h3>Methods</h3>
+          <p>sPRS construction was done using the weights extracted from L1-Regularized Logistic Regression modeling metastasis and genetic variant, age, sex, race, and cancer type. </p>
+          <ul>
+            <li>Primary outcome: metastasis</li>
+            <li>Model: L1-Regularized Logistic regression</li>
+            <li>Covariates: genetic variant, age, sex, race, cancer type</li>
+            <li>Software: R version 4.5.2</li>
+          </ul>
+        </div>
+
+     
+
+
+    <!-- ══════════════════════════════════════════════════════
+         PROJECT 3 — PLACEHOLDER
+    ═══════════════════════════════════════════════════════ -->
+    <section class="project-section" id="project-3">
+
+      <div class="project-header">
+        <div class="proj-num">03</div>
+        <p class="section-label">Gout Chief Complaints · 2026</p>
+        <h2>Classification of Gout from Chief Complaints in the Emergency Department: Comparison of Feature-based and Representation Learning Approaches</h2>
+        <p class="subtitle">
+          This project compares two feature-based and three representation learning models for gout classification from chief complaint notes in the ED.
+        </p>
+        <div class="proj-tags">
+          <span class="tag">Gout Classification</span>
+          <span class="tag">NLP Method Comparisons</span>
+          <span class="tag tag-maize">Method</span>
+        </div>
+        <div class="proj-actions">
+          <a href="Gout_ID_Model_Comparison_Report.pdf" class="btn-primary">Read Report</a>
+          <a href="https://github.com/raoMedha/Website/Gout_ID" class="btn-outline">Code</a>
+          <a href="https://physionet.org/content/emer-complaint-gout/1.0/" class="btn-outline">Data</a>
+        </div>
+      </div>
+
+      <div class="proj-body">
+
+        <div class="subsection">
+          <h3>About</h3>
+          <p>The Gout ED Chief Complaint Corpora consists of 300 chief complaint notes from 2019 and 8,037 from 2020, all taken from an academic medical center in the deep south of the US. Two feature-based methods (SVM and Random Forest), and three representation learning-based methods (BERT, ClinicalBERT, and BioMED RoBERTa) were compared.</p>
+        </div>
+
+        <div class="subsection">
+          <h3>Methods</h3>
+          <p>SVM and Random Forest (RF) used TF-IDF features to classify gout from chief complaint text. BERT, ClinicalBERT, and BioMED RoBERTa were fine-tuned on the chief complaint corpora.</p>
+          <ul>
+            <li>Primary outcome: Gout Identification</li>
+            <li>Model: Feature-based and Representation Learning Models</li>
+            <li>Software:Google Colab</li>
+          </ul>
+        </div>
+
+           <div class="subsection">
+          <h3>Results</h3>
+          <div class="fig-grid">
+
+            <figure>
+              <p class="fig-finding">
+                These plots show the heavy class imbalance in this data set. It also shows that gout chief-complaints do not vary in text length compared to other chief complaints. 
+              </p>
+              <img src="figures/eda_plots.png"
+                   alt="Bar Chart of Complaint Classes and Distribution of Text Length by Chief Complaint Class ">
+              <figcaption>
+                <strong>Figure 1.</strong> Data Overview showing Class Imbalance and Text Length Distribution. 
+              </figcaption>
+            </figure>
+
+            <figure>
+              <p class="fig-finding">
+                ClinicalBERT was identified as the best model, with it's confusion matrix shown here. 
+              </p>
+              <img src="figures/cm_clinicalbert_test.png"
+                   alt="Confusion Matrix showing ClinicalBERT's gout classifications">
+              <figcaption>
+                <strong>Figure 2.</strong> ClinicalBERT Confusion Matrix on the Test Set.  
+              </figcaption>
+            </figure>
+            
+             <figure>
+              <p class="fig-finding">
+                The optimal threshold was 0.60, compared to the default threshold of 0.50. 
+              </p>
+              <img src="figures/threshold_clinicalbert.png"
+                   alt="Threshold Analysis of Best Model: ClinicalBERT">
+              <figcaption>
+                <strong>Figure 3.</strong> Threshold Analysis of ClinicalBERT 
+              </figcaption>
+            </figure>
+
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+
+    <!-- ── TEAM ────────────────────────────────────────────── -->
+    <section id="team">
+      <p class="section-label">Authors</p>
+      <h2>Team</h2>
+      <ul>
+        <li>Medha Rao · MS Health Data Science- University of Michigan  · BSPH Biostatistics- University of North Carolina at Chapel Hill</li>
+      </ul>
+    </section>
+
+  </main>
+
+
+  <!-- ── FOOTER ─────────────────────────────────────────── -->
+  <footer>
+    <p>
+      Questions? <a href="mailto:medharao@umich.edu">medharao@umich.edu</a>
+    </p>
+  </footer>
+
+</body>
+</html>

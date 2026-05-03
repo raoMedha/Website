@@ -1,0 +1,1140 @@
+---
+title: "Final Analysis: Somatic Polygenic Risk Scoring"
+subtitle: |
+  University of Michigan 
+  BIOSTAT 629 Winter 2026
+author: "Medha Rao"
+format: pdf
+---
+
+This quarto document contains all the code to generate all tables, figures, and results from Somatic Polygenic Risk Scoring: A Novel Framework for Metastasis Risk Stratification Using Somatic Genetic Profiles.
+
+# Sections
+
+0.  Reproducibility settings, loading libraries and data, data pre-processing
+1.  Cohort generation (Data Splits)
+2.  Lasso regression
+3.  Lasso regression evaluation via bootstrapping
+4.  sPRS computation
+5.  sPRS evaluation
+6.  sPRS performs better than standard metastasis measures?
+7.  Final tables and figures
+
+# Section 0: Reproducibility settings, libraries and data, and pre-processing
+
+```{r Reproducibility Settings, echo = FALSE, message=FALSE}
+set.seed(107) # for reproducibility
+```
+
+```{r Libraries and Data, message = FALSE, echo = FALSE}
+library(glmnet) # LASSO regression
+library(dplyr) # piping
+library(tidyr) # data frame reshaping
+library(doParallel) # parallel processing for 10-fold CV LASSO and bootstrapping
+library(ggplot2) # for pretty figures
+library(httr) # for gene panel reading
+library(jsonlite) # for gene panel reading
+library(gtsummary) # for pretty tables
+library(gt) # for pretty tables
+library(pROC) # for comparing AUC between sPRS, TMB, and MSI
+
+# tumor sample data: cancer type, sample type (metastasis v primary), metastatic site, gene panel, sample coverage, tumor purity, MSI score, TMB (nonsynonymous)
+clin_samp <- read.delim("https://media.githubusercontent.com/media/cBioPortal/datahub/refs/heads/master/public/msk_chord_2024/data_clinical_sample.txt",
+comment.char="#", stringsAsFactors = TRUE)
+
+# demographic information: age, sex, ethnicity/ race, highest stage
+clin_pt <- read.delim("https://media.githubusercontent.com/media/cBioPortal/datahub/refs/heads/master/public/msk_chord_2024/data_clinical_patient.txt",
+comment.char="#", stringsAsFactors = TRUE)
+
+# mutations: hugo symbol (gene), chromosome, consequence, variant classification, variant type 
+muts <- read.delim("https://media.githubusercontent.com/media/cBioPortal/datahub/refs/heads/master/public/msk_chord_2024/data_mutations.txt",
+comment.char="#", stringsAsFactors = TRUE)
+
+resp <- GET("https://www.cbioportal.org/api/gene-panels/IMPACT505")
+panel <- fromJSON(content(resp, as = "text", encoding = "UTF-8"))
+genes <- panel$genes$hugoGeneSymbol
+impact_505 <- data.frame(gene = genes, stringsAsFactors = TRUE)
+
+resp <- GET("https://www.cbioportal.org/api/gene-panels/IMPACT468")
+panel <- fromJSON(content(resp, as = "text", encoding = "UTF-8"))
+genes <- panel$genes$hugoGeneSymbol
+impact_468 <- data.frame(gene = genes, stringsAsFactors = TRUE)
+
+resp <- GET("https://www.cbioportal.org/api/gene-panels/IMPACT410")
+panel <- fromJSON(content(resp, as = "text", encoding = "UTF-8"))
+genes <- panel$genes$hugoGeneSymbol
+impact_410 <- data.frame(gene = genes, stringsAsFactors = TRUE)
+
+resp <- GET("https://www.cbioportal.org/api/gene-panels/IMPACT341")
+panel <- fromJSON(content(resp, as = "text", encoding = "UTF-8"))
+genes <- panel$genes$hugoGeneSymbol
+impact_341 <- data.frame(gene = genes, stringsAsFactors = TRUE)
+
+resp <- GET("https://www.cbioportal.org/api/gene-panels/IMPACT-HEME-400")
+panel <- fromJSON(content(resp, as = "text", encoding = "UTF-8"))
+genes <- panel$genes$hugoGeneSymbol
+heme400 <- data.frame(gene = genes, stringsAsFactors = TRUE)
+
+
+```
+
+## Mutations Data Pre-Processing
+
+The first step is to select the genes that are common across all panels. This is to reduce misrepresentation of mutation/ wildtype indicators in the mutations that are being considered.
+
+The mutations data set needs to be pivoted wider to create a data frame where each row is a single unique patient, and the rest of the columns are indicators of specific mutation/variant type combinations.
+
+Then, need to select which variant classification system we are using (simple INS, DEL, SNP, DNP, etc OR more detailed non-sense mutation, missense mutation, in frame deletion, frameshift deletion, etc.). To do so, create two data frames with a mutation x variant type indicator column for each patient and see what proportion of patients have each type of classification by gene. If there are very small proportions, use a collapsed variant classification system.
+
+The side-by-side comparison of raw proportions of variations across the whole data set below shows that there are not super drastic differences in proportions between using variant class or variant type. Therefore, proceed using variant classification as that provides more information about the genetic mutation itself, and reserve variant type as a secondary analysis.
+
+```{r Gene Panel List, echo = FALSE, message=FALSE}
+#### Constructing a list of genes sequenced by each panel 
+
+gene_panels <- bind_rows(
+  data.frame(panel = "heme400",   gene = heme400),
+  data.frame(panel = "impact341", gene = impact_341),
+  data.frame(panel = "impact410", gene = impact_410),
+  data.frame(panel = "impact468", gene = impact_468),
+  data.frame(panel = "impact505", gene = impact_505)
+)
+
+# cleaning up gene names and creating huge data frame of each panel and its genes
+gene_panels <- gene_panels |>
+  mutate(gene = sub("gene_list:\\s*", "", gene)) |>      # remove the prefix from row 1
+  group_by(panel) |>
+  mutate(row = row_number()) |>                           # index within each panel
+  ungroup() |>
+  pivot_wider(names_from = panel, values_from = gene) |>
+  select(-row)
+
+common_genes <- Reduce(intersect, lapply(gene_panels, na.omit))
+
+# Can omit this section, only used to check that gene naming conventions were not changed in between panels
+# ensures that genes that are the same but named differently are not treated as different genes
+# just serves as a check! 
+# library(HGNChelper)
+# checkGeneSymbols(gene_panels$heme400) |> select(Suggested.Symbol)
+# checkGeneSymbols(gene_panels$impact341)
+# checkGeneSymbols(gene_panels$impact410) |> select(Suggested.Symbol)
+# checkGeneSymbols(gene_panels$impact468) |> select(Suggested.Symbol)
+# checkGeneSymbols(gene_panels$impact505) |> select(Suggested.Symbol)
+# 
+# gene_panels_checked <- bind_rows(
+#   data.frame(panel = "heme400",   gene = checkGeneSymbols(gene_panels$heme400) |> select(Suggested.Symbol)),
+#   data.frame(panel = "impact341", gene = checkGeneSymbols(gene_panels$impact341) |> select(Suggested.Symbol)),
+#   data.frame(panel = "impact410", gene = checkGeneSymbols(gene_panels$impact410) |> select(Suggested.Symbol)),
+#   data.frame(panel = "impact468", gene = checkGeneSymbols(gene_panels$impact468) |> select(Suggested.Symbol)),
+#   data.frame(panel = "impact505", gene = checkGeneSymbols(gene_panels$impact505) |> select(Suggested.Symbol))
+# )
+# 
+# gene_panels_checked <- gene_panels_checked |> group_by(panel) |>
+#   mutate(row = row_number()) |>                           # index within each panel
+#   ungroup() |>
+#   pivot_wider(names_from = panel, values_from = Suggested.Symbol) |>
+#   select(-row)
+# 
+# setdiff(Reduce(intersect, lapply(gene_panels, na.omit)), Reduce(intersect, lapply(gene_panels_checked, na.omit))) 
+  # 0, so that means all naming conventions were the same across panels 
+
+```
+
+```{r Pre-processing mutations data set , echo = FALSE, message=FALSE}
+
+muts$PATIENT_ID <- substr(muts$Tumor_Sample_Barcode, 1, 9) # create PATIENT_ID in muts data from tumor sample barcode ids
+
+muts <- muts |> filter(Hugo_Symbol %in% common_genes) # filter to only common genes in ALL gene panels 
+
+# length(unique(muts$Hugo_Symbol)) # 524 genes 
+# length(unique(muts$Variant_Type)) # 6 variant types: "DEL" "SNP" "INS" "DNP" "ONP" "TNP"
+# length(unique(muts$Variant_Classification)) # 20: 
+#   [1] "In_Frame_Del"           "Missense_Mutation"      "Frame_Shift_Del"       
+#  [4] "Nonsense_Mutation"      "Splice_Site"            "Frame_Shift_Ins"       
+#  [7] "5'Flank"                "Translation_Start_Site" "Intron"                
+# [10] "In_Frame_Ins"           "Nonstop_Mutation"       "Splice_Region"         
+# [13] "frameshift_insertion"   "5'UTR"                  "3'Flank"               
+# [16] "3'UTR"                  "Silent"                 "RNA"                   
+# [19] "nonsynonymous_SNV"      "IGR"  
+
+muts$HugoVarClass <- paste0(muts$Hugo_Symbol, "_", muts$Variant_Classification) # create a Hugo_Symbol x Variant_Classification 
+muts$HugoVarType <- paste0(muts$Hugo_Symbol, "_", muts$Variant_Type) # create a Hugo_Symbol x Variant_Type
+
+
+##### First data frame: PATIENT_ID, Hugo_Symbol x Variant_Classification indicator variable
+muts_VarClass <- pivot_wider(data = muts, id_cols = PATIENT_ID, 
+                             names_from = HugoVarClass, 
+                             values_from = HugoVarClass, values_fn = ~1, values_fill = 0)
+
+muts_VarClass_Props<- muts_VarClass |> 
+  summarise(across(everything(), ~mean(.x == 1, na.rm = TRUE))) |> 
+  pivot_longer(cols = everything(), 
+               names_to = "Gene_VarClass", values_to = "Proportion") |> arrange(desc(Proportion))
+
+##### Second data frame: PATIENT_ID, Hugo_Symbol x Variant_Type indicator variable
+muts_VarType <- pivot_wider(data = muts, id_cols = PATIENT_ID, 
+                            names_from = HugoVarType, 
+                            values_from = HugoVarType, values_fn = ~1, values_fill = 0)
+
+muts_VarType_Props <- muts_VarType |> 
+  summarise(across(everything(), ~mean(.x == 1, na.rm = TRUE))) |> 
+  pivot_longer(cols = everything(), names_to = "Gene_VarType", 
+               values_to = "Proportion") |> arrange(desc(Proportion))
+
+# display both variant classification v variant type proportions for the top 30 mutation types
+print(cbind(head(muts_VarClass_Props, 30), head(muts_VarType_Props, 30)))
+
+```
+
+# Section 1: Cohort Generation
+
+Now, create a final data set with all patient demographic, sample (metastasis information), and mutation information. Duplicated patients are removed, and all missing observations are dropped (missing mutation information, or missing demographics except for MSI_SCORE. This will be used in all following analyses.
+
+```{r Final Data Set (Cohort Generation), echo = FALSE, message=FALSE}
+########## step one: Filter out duplicated patients from clinical sample (we do not want the same patient in primary AND metastatic groups)
+
+# logical vector saying TRUE if that patient id IS the DUPLICATED pt. ID
+pt_dupes <- duplicated(clin_samp$PATIENT_ID)
+# sum(pt_dupes) # 90 patients have multiple entries (rows)
+# get the PATIEND_ID of the duplicated patients
+pt_dupes_ID <- clin_samp$PATIENT_ID[which(pt_dupes)]
+
+# filter out duplicated patients from clincal_sample, clinical_pt, and muts_VarClass
+clin_samp_filtered <- clin_samp |> filter(!PATIENT_ID %in% pt_dupes_ID) |>
+  select(PATIENT_ID, SAMPLE_ID, CANCER_TYPE, SAMPLE_TYPE, 
+         METASTATIC_SITE, PRIMARY_SITE, GENE_PANEL, SAMPLE_COVERAGE, 
+         TUMOR_PURITY, MSI_SCORE, MSI_TYPE, TMB_NONSYNONYMOUS)
+
+clin_pt_filtered <- clin_pt |> filter(!PATIENT_ID %in% pt_dupes_ID) |>
+  select(PATIENT_ID, GENDER, RACE, ETHNICITY, 
+         CURRENT_AGE_DEID, STAGE_HIGHEST_RECORDED, 
+         SMOKING_PREDICTIONS_3_CLASSES, PRIOR_MED_TO_MSK)
+
+muts_VarClass_filtered <- muts_VarClass |> filter(!PATIENT_ID %in% pt_dupes_ID)
+
+########## step two: Join filtered clinical sample, patient and mutations data sets
+final_df <- full_join(clin_pt_filtered, clin_samp_filtered, by = "PATIENT_ID")
+final_df <- full_join (final_df, muts_VarClass_filtered, by = "PATIENT_ID") 
+
+
+final_df <- final_df[complete.cases(final_df),]
+
+# only complete cases of response variable (SAMPLE_TYPE), and only complete RACE information 
+final_df <- final_df |> filter(SAMPLE_TYPE %in% c("Primary", "Metastasis")) |> filter(!(RACE %in% c("No Value Entered", "Pt Refused To Answer", "Unknown")))
+
+final_df <- droplevels(final_df[final_df$SAMPLE_TYPE %in% c("Primary", "Metastasis"), ])
+
+final_df <- droplevels(final_df[!final_df$RACE %in% c("No Value Entered", "Pt Refused To Answer", "Unknown"), ])
+
+########## step three: map patient filtering so far
+  length(unique(final_df$PATIENT_ID)) # 21475
+  length(unique(muts$PATIENT_ID)) # 23417 patients
+  length(unique(muts_VarClass_filtered$PATIENT_ID)) # 23328
+  length(unique(clin_pt$PATIENT_ID)) # 24950
+  length(unique(clin_samp$PATIENT_ID)) # 24950
+
+
+# from 24950 total unique patients, 23785 unique patients had tumors sequenced, of whom 23417 were kept after filtering for gene sample commonalities between gene panels. There were 90 patients with multiple samples (primary AND metastasis) who were removed, resulting in 23328 patients who had mutation data. Patients with unknown or local recurrence sample types, and patients with unknown/ refusal to answer/ or missing RACE were removed. The final data frame has 21475 unique patients after removing any rows with any NAs. 
+
+# head(final_df)
+
+####### splitting the data 70/30 train, test sets 
+
+# stratified split by metastasis status evenly over cancer type 
+  print("Proportion of COMPLETE final_df my cancer type and metastasis status")
+ prop.table(table(final_df$CANCER_TYPE, final_df$SAMPLE_TYPE))
+
+# want strata by cancer type AND sample type (metastasis status)
+strata <- interaction(final_df$CANCER_TYPE, final_df$SAMPLE_TYPE)
+
+# get test idx (30% test data)
+test_idx <- unlist(tapply(seq_len(nrow(final_df)), strata, function(idx) {
+  sample(idx, round(length(idx) * 0.30))
+}))
+
+test_df  <- final_df[test_idx, ]
+train_df <- final_df[-test_idx, ]
+
+# check the splits 
+print("Data set splits: train and test")
+ nrow(train_df) / nrow(final_df) # 0.6999302
+ nrow(test_df) / nrow(final_df) # 0.3000698
+
+# check for representative proportions across all splits (metastasis x cancer type)
+ print("Data split for train by cancer type and metastasis status")
+ prop.table(table(train_df$CANCER_TYPE, train_df$SAMPLE_TYPE))
+print("Data split for test by cancer type and metastasis status")
+ prop.table(table(test_df$CANCER_TYPE, test_df$SAMPLE_TYPE))
+
+ print("Number of pts in train")
+nrow(train_df)
+ print("Number of pts in test")
+nrow(test_df)
+```
+
+# Section 2: LASSO regression
+
+Now, fit a LASSO logistic regression that penalizes ONLY the mutation x gene variables. The covariates are NOT penalized. This is to adjust for demographics within the sPRS score, so sPRS score will reflect the broader population (MSK-CHORD patient population). A 10-fold CV among 100 lambdas shows which lambda is the best penalty factor. All done on TRAINING data split.
+
+```{r Data pre-processing for LASSO, echo = FALSE, message=FALSE}
+# model: logit(probability of metastasis) ~ age, gender, race, stage highest recorded, smoking, cancer type
+
+# clean up final_df for lasso regression 
+final_df_lasso_1 <- final_df |> select(-PATIENT_ID, -ETHNICITY, -PRIOR_MED_TO_MSK, -SAMPLE_ID, -METASTATIC_SITE, -PRIMARY_SITE, -GENE_PANEL, -SAMPLE_COVERAGE, -TUMOR_PURITY, -MSI_TYPE, -MSI_SCORE, -TMB_NONSYNONYMOUS) |> 
+  mutate(RACE = as.factor(RACE), 
+         y = ifelse(SAMPLE_TYPE == "Metastasis", 1, 0),
+         GENDER = ifelse(GENDER == "Female", 0, 1),
+         CANCER_TYPE = as.factor(CANCER_TYPE),
+         STAGE_HIGHEST_RECORDED = ifelse(STAGE_HIGHEST_RECORDED == "Stage 4", 1, 0))|>
+  select(-SMOKING_PREDICTIONS_3_CLASSES, -SAMPLE_TYPE)
+
+final_df_lasso_1_train <- train_df |> 
+  select(-PATIENT_ID, -ETHNICITY, -PRIOR_MED_TO_MSK, -SAMPLE_ID, -METASTATIC_SITE, -PRIMARY_SITE, -GENE_PANEL, -SAMPLE_COVERAGE, -TUMOR_PURITY, -MSI_TYPE, -MSI_SCORE, -TMB_NONSYNONYMOUS) |> 
+  mutate(RACE = as.factor(RACE), 
+         y = ifelse(SAMPLE_TYPE == "Metastasis", 1, 0),
+         GENDER = ifelse(GENDER == "Female", 0, 1),
+         CANCER_TYPE = as.factor(CANCER_TYPE),
+         STAGE_HIGHEST_RECORDED = ifelse(STAGE_HIGHEST_RECORDED == "Stage 4", 1, 0))|>
+  select(-SMOKING_PREDICTIONS_3_CLASSES, -SAMPLE_TYPE)
+
+
+# create feature matrix
+X_orig <- model.matrix(y ~ ., data = final_df_lasso_1)[, -1]
+
+# identify the mut columns 
+mut_cols <- colnames(X_orig)[-(1:12)]
+
+# calculate means of mutations in training data set
+mut_col_means <- colMeans(X_orig[,mut_cols])
+
+# check all mutations were selected
+ length(mut_col_means) # 1779  + 5 covars = 1784 predictors so yes :) 
+
+# filter out mutations in less than 0.01 (1%) of population 
+X <- X_orig[, c(colnames(X_orig)[1:12], names(mut_col_means[mut_col_means >= 0.01]))]
+
+# check how many mutations survived 
+ length(mut_col_means[mut_col_means >= 0.01]) # 160 mutations survived 
+
+
+# identify the covar cols that are NOT penalized in LASSO
+# i.e. identify col names in X to assign as 0 in penalty_factors vector
+covar_pattern <- "GENDER|^RACE|CURRENT_AGE_DEID|STAGE_HIGHEST_RECORDED|^CANCER_TYPE"
+
+
+# create penalty factor matrix so glm() can identify which columns to penalize (mutations) and which to NOT penalize (covars)
+penalty_factors <- ifelse(grepl(covar_pattern, colnames(X)), 0, 1)
+
+# 1785 vars in final_df_lasso_1 df, 1784 are predictors
+# expand RACE and CANCER_TYPE into factors: RACE now has 6 levels, CANCER_TYPE has 5 levels --> X_orig has 1791 cols (1784 - 2 + 5 + 4)
+# 157 muts of 1779 survived 
+# total predictors (columns) in X model matrix is now: 1791 predictors - 1622 (mutations < 1%) = 169  
+
+# check these are the same 
+ ncol(X)  # 172
+ length(penalty_factors)  # 172
+
+```
+
+```{r LASSO logistic regression 10-fold CV, echo = FALSE, message=FALSE}
+## Fit a LASSO log reg that ONLY penalizes the mutation columns, NOT any of the covars 
+# 10-fold CV
+# 100 lambdas each time  
+
+# PARALLEL PROCESSING SETUP
+nc <- detectCores() - 1
+cl <- makeCluster(nc)
+clusterSetRNGStream(cl, iseed = 107)
+registerDoParallel(cl)
+
+fit <- cv.glmnet(
+  x = X, 
+  y = final_df_lasso_1$y,   
+  family = "binomial", # (metastatic or primary)
+  alpha = 1, # LASSO
+  penalty.factor = penalty_factors,
+  nfolds = 10,
+  nlambda = 100,
+  type.measure = "auc", 
+  parallel = TRUE
+)
+
+stopCluster(cl) 
+
+```
+
+# Section 3. Evaluation of LASSO model via Bootstrapping
+
+Now, identify the best lambda by plotting the auc across the 10 folds, comparing the min lambda to the 1se lambda. Then, the training data set is bootstrapped and the LASSO is fit on those bootstrapped samples to assess the stability of the chosen mutations. Finally, the surviving mutations are identified and will be used to construct sPRS in the next section.
+
+```{r Evaluation of LASSO model and Identifying key mutations, echo=FALSE, message=FALSE}
+##### Evaluation of model 
+
+# Decrease cex.lab to shrink the top labels (and axis labels)
+par(cex.lab = 0.8) 
+# plot AUC
+plot(fit)
+title("AUC Performance Across 10 Folds (Primary Analysis)", line = 3)
+par(cex.lab = 1.0)
+
+# max AUC metric (at lambda.min)
+print("AUC at min lambda")
+max(fit$cvm) # 0.6837915
+
+# AUC metric at 1SE lambda 
+print("AUC at 1SE lambda")
+fit$cvm[fit$lambda == fit$lambda.1se] # 0.6812329
+
+# gene count at lambda.min vs lambda.1se
+print("How many mutations type survive at min labda?")
+fit$nzero[fit$lambda == fit$lambda.min] - 12 # 27 mutations at min lambda
+print("How many mutations type survive at 1SE lambda?")
+fit$nzero[fit$lambda == fit$lambda.1se] - 12# 3 mutations at 1SE lambda
+ 
+
+```
+
+```{r Bootstrapping to assess mutation selection stability, echo =FALSE, message=FALSE}
+
+n_boot <- 1000
+
+# creeate matrix of 0s that will store all beta coefs from each bootsrtap iteration
+boot_coefs <- matrix(0, nrow = n_boot, ncol = length(coef(fit, s = "lambda.min")))
+colnames(boot_coefs) <- rownames(coef(fit, s = "lambda.min"))
+
+# fit lasso with lambda.min and store coefs from each bootstrap iteration
+for (i in 1:n_boot) {
+  boot_idx <- sample(nrow(X), replace = TRUE)
+  
+  fit_boot <- glmnet(
+    x = X[boot_idx, ],
+    y = final_df_lasso_1$y[boot_idx],
+    family = "binomial",
+    alpha = 1,
+    lambda = fit$lambda.min,
+    penalty.factor = penalty_factors
+  )
+  
+  boot_coefs[i, ] <- as.vector(coef(fit_boot))
+}
+
+# inclusion freq: on avg, how many coefs survived (i.e. were NOT 0) over the 1000 bootsraps? 
+inclusion_freq <- colMeans(boot_coefs != 0)
+
+# only select mutations that survived 80% of the time in bootstrapping
+stable_mutations <- names(inclusion_freq[inclusion_freq >= 0.70])
+stable_mutations <- stable_mutations[!grepl("Intercept|GENDER|RACE|CURRENT_AGE_DEID|STAGE_HIGHEST_RECORDED|CANCER_TYPE", stable_mutations)]
+
+# how many mutation survived all of this? 
+print("How many mutations survive bootstrapping?")
+length(stable_mutations) # 13
+
+```
+
+```{r Creating a df for weights and surviving mutations, echo = FALSE, message=FALSE}
+# Extract nonzero coefficients at lambda.min
+betas <- coef(fit, s = "lambda.min") 
+
+# Get relevant mutation coefficients (we want all betas that are NOT 0)
+betas_df <- as.data.frame(as.matrix(betas))
+betas_df$feature <- rownames(betas_df)
+colnames(betas_df)[1] <- "beta"
+
+# Filter to nonzero and exclude intercept + covariates
+covariate_cols <- c("(Intercept)", "GENDER", "RACEBlack Or African American", 
+                    "RACENative American-Am Ind/Alaska", 
+                    "RACENative Hawaiian Or Pacific Isl", "RACEOther", "RACEWhite", 
+                    "CURRENT_AGE_DEID", "STAGE_HIGHEST_RECORDED", 
+                    "CANCER_TYPEColorectal Cancer", 
+                    "CANCER_TYPENon-Small Cell Lung Cancer", 
+                    "CANCER_TYPEPancreatic Cancer", "CANCER_TYPEProstate Cancer")
+
+
+sprs_weights <- betas_df |>
+  filter(!grepl(paste(covariate_cols, collapse = "|"), feature)) |> filter(feature %in% stable_mutations) |> arrange(beta)
+
+rownames(sprs_weights) <- NULL
+print("Betas of surviving mutations")
+print(sprs_weights)
+
+```
+
+# Section 4. sPRS computation
+
+In this section, the weights (betas) from the previous section will be used to create an sPRS score for the test set. This sPRS score will be evaluated by using it as the sole predictor of metastasis.
+
+```{r sPRS Computation, echo = FALSE, message = FALSE}
+## Creating sPRS scores for each patient in test set 
+
+# sPRS calculation is simply the summation of weighted mutation scores (beta coefficients from lasso) 
+
+sPRS_test <- test_df |> 
+  mutate(y = ifelse(SAMPLE_TYPE == "Metastasis", 1, 0)) |>
+  select(PATIENT_ID, GENDER, RACE, CURRENT_AGE_DEID, STAGE_HIGHEST_RECORDED, CANCER_TYPE, TMB_NONSYNONYMOUS, MSI_SCORE, y, all_of(sprs_weights$feature))
+
+# matrix of patient mutation indicators
+sprs_matrix <- as.matrix(sPRS_test |> select(all_of(sprs_weights$feature)))
+
+# multiply the matrix of patient mutation indicators by the betas for each mutation to get patient-level sPRS score
+sPRS <- sprs_matrix %*% sprs_weights$beta
+sPRS_test_scores <- data.frame(PATIENT_ID = sPRS_test$PATIENT_ID, sPRS = sPRS)
+
+sPRS_test <- sPRS_test |> left_join(sPRS_test_scores, by = "PATIENT_ID")
+
+# rough distribution of scores, regardless of metastasis status
+hist(x = sPRS_test$sPRS, col = "lightblue", main = "Overall Distribution of sPRS in Test Set", xlab = "sPRS")
+
+# by metastasis type
+ggplot(sPRS_test, aes(x = sPRS, fill = factor(y))) +
+  geom_histogram(alpha = 0.5, position = "identity", bins = 50) +
+  scale_fill_manual(values = c("0" = "steelblue", "1" = "firebrick"),
+                    labels = c("Primary", "Metastatic")) +
+  labs(title = "sPRS Distribution by Metastatic Status",
+       x = "sPRS", fill = "Status") +
+  theme_classic()
+
+# by cancer type
+ggplot(sPRS_test, aes(x = sPRS, fill = CANCER_TYPE)) +
+  geom_histogram(alpha = 0.5, position = "identity", bins = 50) +
+  facet_wrap(~ CANCER_TYPE) + 
+  labs(title = "sPRS Distribution by Cancer Type",
+       x = "sPRS", fill = "Cancer Type") +
+  theme_classic()
+
+# by cancer type AND metastasis type
+ggplot(sPRS_test, aes(x = sPRS, fill = factor(y))) +
+  geom_histogram(alpha = 0.5, position = "identity", bins = 50) +
+  scale_fill_manual(values = c("0" = "steelblue", "1" = "firebrick"),
+                    labels = c("Primary", "Metastatic")) +
+  facet_wrap(~ CANCER_TYPE) +
+  labs(title = "sPRS Distribution by Cancer Type and Metastatic Status",
+       x = "sPRS", fill = "Status") +
+  theme_classic()
+
+```
+
+# Section 5: sPRS Evaluation
+
+This section fits both an unadjusted and adjusted binomial logistic regression that is answering the following question: is sPRS associated with metastasis status, ignoring all other variables AND is sPRS associated with metastasis status, independent of common cancer demographics?
+
+## Unadjusted Evaluation
+
+Classify metastsis status SOLELY with sPRS. This follows the philosophy that the sPRS was already created by aggregating weights that took into account the adjustment of covariates. Thus, no need to adjust AGAIN by covars.
+
+```{r sPRS Evaluation- Logistic Regression UNADJ, echo=FALSE, message=FALSE}
+
+# log reg where sPRS is the sole predictor for metastasis status
+sPRS_logReg <- glm(y ~ sPRS, data = sPRS_test, family = "binomial")
+
+########## UNADJ sPRS log reg #############
+summary(sPRS_logReg)
+
+# OR for intercept and sPRS beta coeffs
+print("Odds Ratios")
+exp(coef(sPRS_logReg)) 
+
+
+# 95% CIs for intercept and sPRS beta coeffs
+print("95% CIs")
+exp(confint(sPRS_logReg))
+
+
+# LRT 
+print("LRT p-value") 
+pchisq(sPRS_logReg$null.deviance - sPRS_logReg$deviance, df = sPRS_logReg$df.null - sPRS_logReg$df.residual, lower.tail = FALSE)
+
+
+### AUC 
+# first get pred probs 
+pred_probs_sPRS <- predict(sPRS_logReg, type = "response")
+
+# AUROC computation
+roc_sPRS <- function(observed, predicted) {
+  thresholds <- sort(unique(predicted), decreasing = TRUE)
+  
+  tpr <- sapply(thresholds, function(t) {
+    mean(predicted[observed == 1] >= t, na.rm = TRUE)  # sensitivity
+  })
+  
+  fpr <- sapply(thresholds, function(t) {
+    mean(predicted[observed == 0] >= t, na.rm = TRUE)  # 1 - specificity
+  })
+  
+  # AUC using trapezoidal rule
+  auc <- sum(diff(fpr) * (tpr[-1] + tpr[-length(tpr)]) / 2, na.rm = TRUE)
+  
+  list(auc = abs(auc), tpr = tpr, fpr = fpr)
+}
+
+roc_result_unadj_sPRS <- roc_sPRS(sPRS_test$y, pred_probs_sPRS)
+
+# Plot ROC curve
+plot(roc_result_unadj_sPRS$fpr, roc_result_unadj_sPRS$tpr, 
+     type = "l", col = "firebrick", lwd = 2,
+     xlab = "1 - Specificity (FPR)", 
+     ylab = "Sensitivity (TPR)",
+     main = "ROC Curve- sPRS (unadj)")
+abline(a = 0, b = 1, lty = 2, col = "gray")
+
+# AUC for test sPRS unadjusted Log Reg
+print("AUC for unadjusted sPRS log reg")
+roc_result_unadj_sPRS$auc 
+
+```
+
+## Adjusted Evaluation
+
+Classify metastasis status with sPRS, adjusting for covars. This follows the philosophy that the sPRS was created with covars adjusted for at the reference groups or at 0, but adjusting specifically for covars when classifying patients' metastasis status will spread signal across what is appropriate and make sPRS fair across demographics.
+
+```{r sPRS Evaluation- Logistic Regression ADJ, echo=FALSE, message=FALSE}
+
+# log reg adj for covars
+sPRS_logReg_adj <- glm(y ~ sPRS + GENDER + CURRENT_AGE_DEID + as.factor(CANCER_TYPE) + as.factor(RACE), data = sPRS_test, family = "binomial")
+
+########## ADJ sPRS log reg #############
+summary(sPRS_logReg_adj)
+
+# OR for intercept and sPRS beta coeffs
+print("Odds Ratios for intercept and sPRS only (adjusted model)")
+exp(coef(sPRS_logReg_adj)[1:2]) 
+
+                                    
+# 95% CIs for intercept and sPRS beta coeffs by hand due to warnings when model is refitted multiple times 
+se <- sqrt(diag(vcov(sPRS_logReg_adj)))
+
+ci_df <- data.frame(
+  lower = exp(coef(sPRS_logReg_adj) - 1.96 * se),
+  upper = exp(coef(sPRS_logReg_adj) + 1.96 * se)
+)
+
+print("95% CIs for intercept and sPRS (adjusted model)")
+print(ci_df[1:2,])
+
+
+# LRT 
+print("LRT p-value (adjusted model)")
+pchisq(sPRS_logReg_adj$null.deviance - sPRS_logReg_adj$deviance, df = sPRS_logReg_adj$df.null - sPRS_logReg_adj$df.residual, lower.tail = FALSE)
+
+
+### AUC 
+# first get pred probs 
+pred_probs_sPRS_adj <- predict(sPRS_logReg_adj, type = "response")
+
+#AUROC computation
+roc_result_adj_sPRS <- roc_sPRS(sPRS_test$y, pred_probs_sPRS_adj)
+
+# Plot ROC curve
+plot(roc_result_adj_sPRS$fpr, roc_result_adj_sPRS$tpr, 
+     type = "l", col = "firebrick", lwd = 2,
+     xlab = "1 - Specificity (FPR)", 
+     ylab = "Sensitivity (TPR)",
+     main = "ROC Curve- sPRS adjusted")
+abline(a = 0, b = 1, lty = 2, col = "gray")
+
+# AUC for test sPRS unadjusted Log Reg
+print("AUC for adjusted sPRS log reg")
+roc_result_adj_sPRS$auc
+
+```
+
+Based on these results, we can see that sPRS is significantly associated with metastasis status (p \< 0.01 in unadjusted and adjusted models). Note the AUCs for both unadjusted and adjusted (0.55, 0.60 respectively) which indicate moderate classification abilities. This is expected from an sPRS. Traditionally, PRSs are not the sole "predictors" for a biological event, and both the p-values and AUCs follow this as sPRS is associated with metastatic status, but is not solely associated with metstasis status. This reflects the biological complexity beyond tumor genetic profiles that influence metastasis.
+
+# Section 6: Compare sPRS to similar scores/ predictors
+
+Now that sPRS has been evaluated as a valid "risk score" for metastasis, compare it to other similar scores or predictors, such as TMB, when finding associated metastasis status. Comparisons: TMB and MSI
+
+## TMB
+
+```{r TMB test, echo = FALSE, message=FALSE}
+
+tmb_logReg <- glm(y ~ TMB_NONSYNONYMOUS, data = sPRS_test, family = "binomial")
+
+summary(tmb_logReg)
+
+# OR for intercept and sPRS beta coeffs
+print("Odds Ratios for TMB")
+exp(coef(tmb_logReg)) 
+
+ 
+# 95% CIs
+print("95% CIs")
+exp(confint(tmb_logReg))
+
+
+# LRT 
+print("LRT p-value") 
+pchisq(tmb_logReg$null.deviance - tmb_logReg$deviance, df = tmb_logReg$df.null - tmb_logReg$df.residual, lower.tail = FALSE)
+ # 0.0002508461, significant :) 
+
+### AUC 
+# first get pred probs 
+pred_probs_tmb <- predict(tmb_logReg, type = "response")
+
+roc_result_unadj_tmb <- roc_sPRS(sPRS_test$y, pred_probs_tmb)
+
+# Plot ROC curve
+plot(roc_result_unadj_tmb$fpr, roc_result_unadj_tmb$tpr, 
+     type = "l", col = "firebrick", lwd = 2,
+     xlab = "1 - Specificity (FPR)", 
+     ylab = "Sensitivity (TPR)",
+     main = "ROC Curve- TMB")
+abline(a = 0, b = 1, lty = 2, col = "gray")
+
+# AUC for test TMB log reg
+print("AUC for TMB")
+roc_result_unadj_tmb$auc # 0.4773289
+
+
+####### ADJUSTED 
+
+tmb_logReg_adj <- glm(y ~ TMB_NONSYNONYMOUS + GENDER + CURRENT_AGE_DEID + as.factor(CANCER_TYPE) + as.factor(RACE), data = sPRS_test, family = "binomial")
+
+### AUC 
+# first get pred probs 
+pred_probs_tmb_adj <- predict(tmb_logReg_adj, type = "response")
+
+roc_result_adj_tmb <- roc_sPRS(sPRS_test$y, pred_probs_tmb_adj)
+
+# Plot ROC curve
+plot(roc_result_adj_tmb$fpr, roc_result_adj_tmb$tpr, 
+     type = "l", col = "firebrick", lwd = 2,
+     xlab = "1 - Specificity (FPR)", 
+     ylab = "Sensitivity (TPR)",
+     main = "ROC Curve- TMB")
+abline(a = 0, b = 1, lty = 2, col = "gray")
+
+# AUC for test TMB log reg
+print("AUC for TMB")
+roc_result_adj_tmb$auc 
+
+```
+
+The AUCs for the adjusted and unadjusted TMB models are are less than the sPRS models (both adjusted and unadjusted). TMB is not a better proxy score for metastasis risk.
+
+## MSI
+
+```{r MSI, echo = FALSE, message=FALSE}
+
+sPRS_test <- sPRS_test |> mutate(MSI_SCORE = case_when(MSI_SCORE == -1 ~ NA,
+                                          MSI_SCORE != -1~ MSI_SCORE)) 
+
+ sum(is.na(sPRS_test$MSI_SCORE)) 
+  # 23 missing MSI scores in test set 
+
+msi_logReg <- glm(y ~ MSI_SCORE, data = sPRS_test, family = "binomial", na.action = na.omit)
+
+summary(msi_logReg)
+
+# OR for intercept and sPRS beta coeffs
+print("Odds Ratios for MSI")
+exp(coef(msi_logReg)) 
+
+# 95% CIs
+print("95% CIs")
+exp(confint(msi_logReg))
+
+# LRT 
+print("LRT p-value") 
+pchisq(msi_logReg$null.deviance - msi_logReg$deviance, df = msi_logReg$df.null - msi_logReg$df.residual, lower.tail = FALSE)
+
+
+### AUC 
+# first get pred probs 
+pred_probs_msi <- predict(msi_logReg, type = "response")
+
+roc_result_msi <- roc_sPRS(sPRS_test$y, pred_probs_msi)
+
+# Plot ROC curve
+plot(roc_result_msi$fpr, roc_result_msi$tpr, 
+     type = "l", col = "firebrick", lwd = 2,
+     xlab = "1 - Specificity (FPR)", 
+     ylab = "Sensitivity (TPR)",
+     main = "ROC Curve- MSI")
+abline(a = 0, b = 1, lty = 2, col = "gray")
+
+# AUC for test MSI log reg
+print("AUC for MSI")
+roc_result_msi$auc # 0.3841618
+
+
+
+######## adjusted
+
+msi_logReg_adj <- glm(y ~ MSI_SCORE+ GENDER + CURRENT_AGE_DEID + as.factor(CANCER_TYPE) + as.factor(RACE), data = sPRS_test, family = "binomial", na.action = na.omit)
+
+pred_probs_msi_adj <- predict(msi_logReg_adj, type = "response")
+
+roc_result_msi_adj <- roc_sPRS(sPRS_test$y, pred_probs_msi_adj)
+
+# Plot ROC curve
+plot(roc_result_msi_adj$fpr, roc_result_msi_adj$tpr, 
+     type = "l", col = "firebrick", lwd = 2,
+     xlab = "1 - Specificity (FPR)", 
+     ylab = "Sensitivity (TPR)",
+     main = "ROC Curve- MSI")
+abline(a = 0, b = 1, lty = 2, col = "gray")
+
+# AUC for test MSI log reg
+print("AUC for MSI")
+roc_result_msi_adj$auc # 0.5936014
+
+```
+
+The AUCs for the adjusted and unadjusted MSI models are less than the sPRS models (both adjusted and unadjusted). MSI is not a better proxy score for metastasis risk.
+
+```{r comparing AUCs for sPRS, TMB, and MSI}
+use_this <- sPRS_test |> filter(!is.na(MSI_SCORE))
+library(pROC)
+roc_sprs <- roc(sPRS_test$y, pred_probs_sPRS)
+roc_tmb  <- roc(sPRS_test$y, pred_probs_tmb)
+roc_msi  <- roc(use_this$y, pred_probs_msi)
+
+# DeLong's test comparing sPRS vs TMB
+roc.test(roc_sprs, roc_tmb, method = "delong")
+
+# DeLong's test comparing sPRS vs MSI
+roc.test(roc_sprs, roc_msi, method = "delong")
+
+```
+# Section 7: Final Tables and Figures
+
+## Demographics Table
+
+```{r Table 1. Demographics Table, echo=FALSE, message=FALSE}
+demo_table <- final_df |>
+  select(CURRENT_AGE_DEID, GENDER, RACE, CANCER_TYPE, 
+         STAGE_HIGHEST_RECORDED, TMB_NONSYNONYMOUS, MSI_SCORE, SAMPLE_TYPE) |>
+  mutate(RACE = factor(RACE, levels = names(sort(table(RACE), decreasing = TRUE))),
+    CANCER_TYPE = factor(CANCER_TYPE, levels = names(sort(table(CANCER_TYPE), 
+                                                          decreasing = TRUE))))|>
+  mutate(MSI_SCORE = case_when(MSI_SCORE == -1 ~ NA,
+                               MSI_SCORE != -1~ MSI_SCORE)) |>
+  mutate(STAGE_HIGHEST_RECORDED = factor(STAGE_HIGHEST_RECORDED, 
+                                          levels = c("Stage 1-3", "Stage 4"))) |>
+  tbl_summary(by = SAMPLE_TYPE,
+              label = list(CURRENT_AGE_DEID ~ "Age",
+                           GENDER ~ "Gender",
+                           RACE ~ "Race",
+                           CANCER_TYPE ~ "Cancer Type",
+                           STAGE_HIGHEST_RECORDED ~ "Highest Stage Recorded",
+                           TMB_NONSYNONYMOUS ~ "TMB",
+                           MSI_SCORE ~ "MSI Score"), 
+               statistic = list(all_continuous() ~ "{mean} ({sd})",
+                                all_categorical() ~ "{n} ({p}%)"), 
+                missing_text = "Missing",
+  missing_stat = "{N_miss} ({p_miss}%)") |>
+  add_p(test = list(RACE ~ "fisher.test"),
+        test.args = list(RACE ~ list(simulate.p.value = TRUE))) |>
+  add_overall() |> 
+  as_gt() |>
+  gt::rm_footnotes() |>
+  gt::tab_footnote(
+    footnote = "Mean (SD); n (%)",
+    locations = gt::cells_column_labels(columns = "stat_0")) |>
+  gt::tab_footnote(
+    footnote = "Wilcoxon rank sum test; Pearson's Chi-squared test except for Race which used Fisher's Exact Test with simulated p-value due to small cell counts",
+    locations = gt::cells_column_labels(columns = "p.value")) |>
+  gt::tab_options(
+    table.font.size = 12,
+    heading.title.font.size = 14,
+    column_labels.font.weight = "bold",
+    row.striping.include_table_body = FALSE,
+    table_body.hlines.color = "transparent",
+    table.border.top.color = "black",
+    table.border.bottom.color = "black"
+  ) |>
+  gt::opt_table_font(font = "Times New Roman") |>
+    gt::tab_style(
+    style = gt::cell_text(weight = "bold"),
+    locations = gt::cells_body(
+      columns = "label", 
+      rows = label %in% c("Age", "Gender", "Race", "Cancer Type", 
+                          "Highest Stage Recorded", "TMB", "MSI Score"))) |>
+  gt::tab_header(
+    title = gt::md("**Table 1. Patient Characteristics by Metastatic Status**"))
+gtsave(demo_table, "Demographics_Table.png")
+```
+
+```{r Figure 1. AUC Performance across 10 Folds (Primary Analysis), echo = FALSE, message = FALSE}
+# Decrease cex.lab to shrink the top labels (and axis labels)
+par(cex.lab = 0.8) 
+
+# plot AUC and save for results
+png("AUC_Performance_Primary.png", width = 800, height = 600)
+plot(fit)
+title("AUC Performance Across 10 Folds", line = 3)
+
+par(cex.lab = 1.0)
+dev.off()
+
+knitr::include_graphics("AUC_Performance_Primary.png")
+
+```
+
+```{r Table 2. Surviving Mutations, echo = FALSE, message=FALSE}
+
+table2 <- data.frame(feature = stable_mutations) |>
+  mutate(gene = sub("_.*", "", feature),
+         mutation_type = sub("^[^_]*_", "", feature)) |> 
+  mutate(mutation_type = gsub("_", " ", mutation_type)) |>
+  mutate(mutation_type = case_when(
+    mutation_type == "Frame Shift Del" ~ "Frame Shift Deletion",
+    mutation_type == "Missense Mutation" ~ "Missense",
+    mutation_type == "Nonsense Mutation" ~ "Nonsense",
+    .default = "Splice Site")) |>
+  left_join(sprs_weights |> select(feature, beta), by = "feature") |>
+  mutate(beta = round(beta, 3)) |>
+  arrange(desc(beta)) |>
+  select(gene, mutation_type, beta) |>
+  gt() |>
+  gt::cols_label(
+    gene = "Gene",
+    mutation_type = "Mutation Type",
+    beta = "sPRS Weight"
+  ) |>
+  gt::tab_header(
+    title = md("**Mutations Retained in sPRS**")
+  ) |>
+  gt::tab_options(
+    table.font.size = 12,
+    column_labels.font.weight = "bold",
+    row.striping.include_table_body = FALSE,
+    table.border.top.color = "black",
+    table.border.bottom.color = "black"
+  ) |>
+  gt::opt_table_font(font = "Roboto")
+
+gtsave(table2, "Retained_Mutations_Primary.png")
+
+```
+
+```{r Table 3 sPRS adj and unadj models}
+
+# unadjusted 
+or_unadj <- exp(coef(sPRS_logReg))["sPRS"]
+se_unadj <- sqrt(diag(vcov(sPRS_logReg)))["sPRS"]
+ci_unadj_lower <- exp(coef(sPRS_logReg)["sPRS"] - 1.96 * se_unadj)
+ci_unadj_upper <- exp(coef(sPRS_logReg)["sPRS"] + 1.96 * se_unadj)
+lrt_unadj <- pchisq(sPRS_logReg$null.deviance - sPRS_logReg$deviance,
+                    df = sPRS_logReg$df.null - sPRS_logReg$df.residual,
+                    lower.tail = FALSE)
+
+# adjusted
+or_adj <- exp(coef(sPRS_logReg_adj))["sPRS"]
+se_adj <- sqrt(diag(vcov(sPRS_logReg_adj)))["sPRS"]
+ci_adj_lower <- exp(coef(sPRS_logReg_adj)["sPRS"] - 1.96 * se_adj)
+ci_adj_upper <- exp(coef(sPRS_logReg_adj)["sPRS"] + 1.96 * se_adj)
+lrt_adj <- pchisq(sPRS_logReg_adj$null.deviance - sPRS_logReg_adj$deviance,
+                  df = sPRS_logReg_adj$df.null - sPRS_logReg_adj$df.residual,
+                  lower.tail = FALSE)
+
+# create a table 
+sprs_results <- data.frame(
+  Model = c("Unadjusted", "Adjusted"),
+  OR = round(c(or_unadj, or_adj), 3),
+  CI_Lower = round(c(ci_unadj_lower, ci_adj_lower), 3),
+  CI_Upper = round(c(ci_unadj_upper, ci_adj_upper), 3),
+  LRT_p = formatC(c(lrt_unadj, lrt_adj), format = "e", digits = 2),
+  AUC = round(c(roc_result_unadj_sPRS$auc, roc_result_adj_sPRS$auc), 3)
+)
+
+table3 <- sprs_results |>
+  mutate(`95% CI` = paste0("(", CI_Lower, ", ", CI_Upper, ")")) |>
+  select(Model, OR, `95% CI`, LRT_p, AUC) |>
+  gt() |>
+  gt::cols_label(
+    Model   = "Model",
+    OR      = "Odds Ratio",
+    `95% CI` = "95% CI",
+    LRT_p   = "LRT p-value",
+    AUC     = "AUC"
+  ) |>
+  gt::tab_header(
+    title = md("**Table 3. Association Between sPRS and Metastatic Status**")
+  ) |>
+  gt::tab_footnote(
+    footnote = "Adjusted model includes age, sex, race, and cancer type as covariates.",
+    locations = gt::cells_body(columns = Model, rows = Model == "Adjusted")
+  ) |>
+  gt::tab_footnote(
+    footnote = "LRT p-value tests the null hypothesis that sPRS does not improve model fit over the intercept-only model.",
+    locations = gt::cells_column_labels(columns = LRT_p)
+  ) |>
+  gt::tab_options(
+    table.font.size = 12,
+    column_labels.font.weight = "bold",
+    row.striping.include_table_body = FALSE,
+    table.border.top.color = "black",
+    table.border.bottom.color = "black"
+  ) |>
+  gt::opt_table_font(font = "Times New Roman")
+
+gtsave(table3, "sPRS_Association_Table.png")
+
+```
+
+
+```{r AUC for TMB MSI comparisons}
+library(pROC)
+
+
+# get observed y for MSI due to missing MSI 
+y_msi <- sPRS_test$y[!is.na(sPRS_test$MSI_SCORE)]
+
+# pROC ROC objects
+roc_sprs_unadj <- roc(sPRS_test$y, pred_probs_sPRS, direction = "auto", quiet = TRUE)
+roc_sprs_adj   <- roc(sPRS_test$y, pred_probs_sPRS_adj,   direction = "auto", quiet = TRUE)
+roc_tmb_unadj  <- roc(sPRS_test$y, pred_probs_tmb,  direction = "auto", quiet = TRUE)
+roc_tmb_adj    <- roc(sPRS_test$y, pred_probs_tmb_adj,    direction = "auto", quiet = TRUE)
+roc_msi_unadj  <- roc(y_msi,       pred_probs_msi,  direction = "auto", quiet = TRUE)
+roc_msi_adj    <- roc(y_msi,       pred_probs_msi_adj,    direction = "auto", quiet = TRUE)
+
+
+# DeLong's tests (unadjusted)
+delong_sprs_vs_tmb_unadj <- roc.test(roc_sprs_unadj, roc_tmb_unadj, method = "delong")
+delong_sprs_vs_msi_unadj <- roc.test(roc_sprs_unadj, roc_msi_unadj, method = "delong")
+delong_tmb_vs_msi_unadj  <- roc.test(roc_tmb_unadj,  roc_msi_unadj, method = "delong")
+
+# DeLong's tests (adjusted)
+delong_sprs_vs_tmb_adj <- roc.test(roc_sprs_adj, roc_tmb_adj, method = "delong")
+delong_sprs_vs_msi_adj <- roc.test(roc_sprs_adj, roc_msi_adj, method = "delong")
+delong_tmb_vs_msi_adj  <- roc.test(roc_tmb_adj,  roc_msi_adj, method = "delong")
+
+# make the table of compariskns
+auc_table <- data.frame(
+  Model = c("sPRS", "TMB", "MSI"),
+  
+  AUC_Unadj = round(c(
+    as.numeric(auc(roc_sprs_unadj)),
+    as.numeric(auc(roc_tmb_unadj)),
+    as.numeric(auc(roc_msi_unadj))), 3),
+  
+  AUC_Adj = round(c(
+    as.numeric(auc(roc_sprs_adj)),
+    as.numeric(auc(roc_tmb_adj)),
+    as.numeric(auc(roc_msi_adj))), 3),
+  
+  # DeLong p-value vs sPRS (unadjusted)
+  p_vs_sPRS_unadj = c(
+    "-",
+    formatC(delong_sprs_vs_tmb_unadj$p.value, format = "e", digits = 2),
+    formatC(delong_sprs_vs_msi_unadj$p.value, format = "e", digits = 2)),
+  
+  # DeLong p-value vs sPRS (adjusted)
+  p_vs_sPRS_adj = c(
+    "-",
+    formatC(delong_sprs_vs_tmb_adj$p.value, format = "e", digits = 2),
+    formatC(delong_sprs_vs_msi_adj$p.value, format = "e", digits = 2)))
+
+# make the Table 4 for report 
+table4 <- auc_table |>
+  gt() |>
+  gt::cols_label(
+    Model           = "Measure",
+    AUC_Unadj       = "AUC (Unadjusted)",
+    AUC_Adj         = "AUC (Adjusted)",
+    p_vs_sPRS_unadj = "DeLong p-value vs sPRS (Unadjusted)",
+    p_vs_sPRS_adj   = "DeLong p-value vs sPRS (Adjusted)"
+  ) |>
+  gt::tab_header(
+    title = md("**Table 4. AUC Comparison: sPRS, TMB, and MSI**")
+  ) |>
+  gt::tab_footnote(
+    footnote = "DeLong's test for correlated ROC curves. Significance threshold α = 0.05.",
+    locations = gt::cells_column_labels(columns = p_vs_sPRS_unadj)
+  ) |>
+  gt::tab_footnote(
+    footnote = "MSI ROC curve constructed in the decreasing direction due to empirically observed inverse association with metastatic status.",
+    locations = gt::cells_body(columns = Model, rows = Model == "MSI")
+  ) |>
+  gt::tab_footnote(
+    footnote = "Adjusted models include age, sex, race, and cancer type as covariates.",
+    locations = gt::cells_column_labels(columns = AUC_Adj)
+  ) |>
+  gt::tab_options(
+    table.font.size = 12,
+    column_labels.font.weight = "bold",
+    row.striping.include_table_body = FALSE,
+    table.border.top.color = "black",
+    table.border.bottom.color = "black"
+  ) |>
+  gt::opt_table_font(font = "Times New Roman")
+
+gtsave(table4, "AUC_Comparison_Table.png")
+
+
+
+```
+
+
+```{r Figure 2. Plot of Low, Average, and High sPRS by metastasis risk, ehco = FALSE, message = FALSE }
+# create df with sPRS scores grouped by quantiles (high is top 25%, low is bottom 25%)
+sPRS_test_df <- sPRS_test |>
+  mutate(sPRS_group = case_when(
+    sPRS >= quantile(sPRS, 0.75) ~ "High",
+    sPRS <= quantile(sPRS, 0.25) ~ "Low",
+    TRUE ~ "Average"
+  )) |> mutate(sPRS_tertile = case_when(
+    sPRS <= quantile(sPRS, 0.33) ~ "Low",
+    sPRS<= quantile(sPRS, 0.66) ~ "Medium",
+    TRUE ~ "High"
+  ),
+  sPRS_tertile = factor(sPRS_tertile, levels = c("Low", "Medium", "High")))
+
+plot_this_tertiles <- sPRS_test_df |>
+  group_by(sPRS_tertile) |>
+  summarise(
+    n = n(),
+    n_metastatic = sum(y),
+    metastatic_rate = mean(y) * 100
+  )
+
+tertile_df <- plot_this_tertiles |>
+  mutate(
+    se = sqrt(metastatic_rate/100 * (1 - metastatic_rate/100) / n),
+    lower = (metastatic_rate/100 - 1.96 * se) * 100,
+    upper = (metastatic_rate/100 + 1.96 * se) * 100
+  )
+
+ggplot(tertile_df, aes(x = sPRS_tertile, y = metastatic_rate, 
+                        color = sPRS_tertile)) +
+  geom_point(size = 4) +
+  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.2) +
+  scale_color_manual(values = c("Low" = "steelblue",
+                                 "Medium" = "gray",
+                                 "High" = "firebrick")) +
+  labs(title = "Distribution of sPRS by Group",
+       x = "sPRS Group", 
+       y = "Metastatic Rate (%)") +
+  theme_classic() +
+  theme(legend.position = "none",
+        plot.caption = element_text(hjust = 0, size = 7)) 
+ggsave("sPRS_Distribution_Groups_Primary.png")
+
+sPRS_test_df <- sPRS_test_df |> mutate(sPRS_tertile = case_when(
+    sPRS <= quantile(sPRS, 0.33) ~ "Low",
+    sPRS<= quantile(sPRS, 0.66) ~ "Medium",
+    TRUE ~ "High"))
+
+# Contingency table of tertile vs metastatic status
+chisq.test(table(sPRS_test_df$sPRS_group, sPRS_test_df$y))
+
+# Low vs High (most important comparison)
+low_high <- sPRS_test_df |> filter(sPRS_group %in% c("Low", "High"))
+chisq.test(table(low_high$sPRS_group, low_high$y))
+
+# Low vs Medium
+low_med <- sPRS_test_df |> filter(sPRS_group %in% c("Low", "Medium"))
+chisq.test(table(low_med$sPRS_group, low_med$y))
+
+# Medium vs High
+med_high <- sPRS_test_df |> filter(sPRS_group %in% c("Medium", "High"))
+chisq.test(table(med_high$sPRS_group, med_high$y))
+
+bonferroni_correction <- 0.05 / 3
+
+
+
+```
+
+
+

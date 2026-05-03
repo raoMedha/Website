@@ -1,0 +1,2161 @@
+---
+title: "CRC Biomarker Survival Analysis by Treatment MoA"
+author: "Medha Rao"
+date: today
+format: pdf
+---
+
+# Preliminary Project 
+
+This project aims to identify genetic biomarkers that are associated with overall survival by various treatment mechanism of action groups amongst colorectal cancer patients. 
+Database used: MSK-CHORD
+
+```{r Library Loading, echo=FALSE, message=FALSE, warning=FALSE}
+library(tidyverse) # data handling, plots 
+library(gt) # "good table" to make pretty tables
+library(survival) # survivial analysis 
+library(boot) # boostrapping analyses
+library(survminer) # Kaplan-Meier plots 
+library(reshape2) # correlation heat map creation helper
+```
+
+```{r Read in data, echo = FALSE}
+data_timeline_mmr <- read.delim(file = "msk_chord_2024/data_timeline_mmr.txt", header = TRUE)
+
+data_timeline_pdl1<- read.delim(file = "msk_chord_2024/data_timeline_pdl1.txt", header = TRUE)
+
+data_timeline_prior_meds <- read.delim(file = "msk_chord_2024/data_timeline_prior_meds.txt", header = TRUE)
+
+data_timeline_radiation <- read.delim(file = "msk_chord_2024/data_timeline_radiation.txt", header = TRUE)
+
+data_timeline_surgery <- read.delim(file = "msk_chord_2024/data_timeline_surgery.txt", header = TRUE)
+
+data_clinical_patient <- read.delim(file = "msk_chord_2024/data_clinical_patient.txt", header = TRUE, skip = 4)
+
+data_clinical_sample <- read.delim(file = "msk_chord_2024/data_clinical_sample.txt", header = TRUE, skip = 4)
+
+data_timeline_diagnosis <- read.delim(file = "msk_chord_2024/data_timeline_diagnosis.txt", header = TRUE)
+
+data_timeline_treatment <- read.delim(file = "msk_chord_2024/data_timeline_treatment.txt", header = TRUE)
+
+data_mutations <- read.delim(file = "msk_chord_2024/data_mutations.txt", header = TRUE)
+```
+
+```{r CRC only data sets}
+# Identifying only CRC patients
+CRC_patients <- data_clinical_sample |> filter(CANCER_TYPE == "Colorectal Cancer") |>
+  pull(PATIENT_ID) # CLINICAL SAMPLE has MSI flags
+  # 5543 CRC patients
+
+# Consolidation of clinical data sets (demographic info, cancer info, MSI info, etc.)
+CRC_clinical_pt <- data_clinical_patient |> filter(PATIENT_ID %in% CRC_patients) 
+CRC_clinical_samp<- data_clinical_sample |> filter(PATIENT_ID %in% CRC_patients)
+
+CRC_clinical <- full_join(CRC_clinical_pt, CRC_clinical_samp)
+
+# timeline data --> only selecting CRC patients
+CRC_diagnosis <- data_timeline_diagnosis |> filter(PATIENT_ID %in% CRC_patients)
+
+CRC_mmr <- data_timeline_mmr |> filter(PATIENT_ID %in% CRC_patients)
+
+CRC_pdl1 <- data_timeline_pdl1 |> filter(PATIENT_ID %in% CRC_patients)
+
+CRC_priorMeds <- data_timeline_prior_meds |> filter(PATIENT_ID %in% CRC_patients)
+
+CRC_radiation <- data_timeline_radiation |> filter(PATIENT_ID %in% CRC_patients)
+
+CRC_surgery <- data_timeline_surgery |> filter(PATIENT_ID %in% CRC_patients)
+
+CRC_tx <- data_timeline_treatment |> filter(PATIENT_ID %in% CRC_patients)
+
+CRC_muts <- data_mutations |> 
+  mutate(PATIENT_ID = str_extract(Tumor_Sample_Barcode, "P-\\d{7}")) |>
+  filter(PATIENT_ID %in% CRC_patients)
+
+# cleaning up environment :) 
+rm(data_clinical_patient, data_clinical_sample, data_mutations, data_timeline_diagnosis, data_timeline_mmr, data_timeline_pdl1, data_timeline_prior_meds, data_timeline_radiation, data_timeline_surgery, data_timeline_treatment, CRC_clinical_pt, CRC_clinical_samp)
+```
+
+```{r Drug/ MoA mapping }
+# note: MoA is the same as saying treatment mechanism of action 
+
+# create a mapping from each possible ( from Feb 2026 available info) CRC drug name to a drug treatment MoA category
+drug_moa <- tibble::tribble(
+  ~drug, ~moa,
+  "VINCRISTINE", "CHEMO_CYTOTOXIC",
+  "FLUDARABINE", "CHEMO_CYTOTOXIC",
+  "CYCLOPHOSPHAMIDE", "CHEMO_CYTOTOXIC",
+  "CISPLATIN", "CHEMO_CYTOTOXIC",
+  "GEMCITABINE", "CHEMO_CYTOTOXIC",
+  "CAPECITABINE", "CHEMO_CYTOTOXIC",
+  "FLUOROURACIL", "CHEMO_CYTOTOXIC",
+  "LEUCOVORIN", "CHEMO_CYTOTOXIC",
+  "OXALIPLATIN", "CHEMO_CYTOTOXIC",
+  "IRINOTECAN", "CHEMO_CYTOTOXIC",
+  "BEVACIZUMAB", "ANTI_VEGF_ANGIO",
+  "PANITUMUMAB", "ANTI_EGFR",
+  "INVESTIGATIONAL", "UNKNOWN_INVESTIGATIONAL",
+  "ZOLEDRONIC ACID", "HORMONAL_SUPPORTIVE_OTHER",
+  "FLOXURIDINE", "CHEMO_CYTOTOXIC",
+  "VEMURAFENIB", "TARGETED_OTHER",
+  "CETUXIMAB", "ANTI_EGFR",
+  "MEGESTROL", "HORMONAL_SUPPORTIVE_OTHER",
+  "TIPIRACIL-TRIFLURIDINE", "CHEMO_CYTOTOXIC",
+  "REGORAFENIB", "ANTI_VEGF_ANGIO",
+  "TRASTUZUMAB", "TARGETED_OTHER",
+  "YTTRIUM Y-90 THERASPHERES", "RADIOPHARM",
+  "MITOMYCIN", "CHEMO_CYTOTOXIC",
+  "PAMIDRONATE", "HORMONAL_SUPPORTIVE_OTHER",
+  "DABRAFENIB", "TARGETED_OTHER",
+  "TRAMETINIB", "TARGETED_OTHER",
+  "CARBOPLATIN", "CHEMO_CYTOTOXIC",
+  "ETOPOSIDE", "CHEMO_CYTOTOXIC",
+  "COBIMETINIB", "TARGETED_OTHER",
+  "ISOTRETINOIN", "HORMONAL_SUPPORTIVE_OTHER",
+  "RITUXIMAB", "IMMUNOTHERAPY",
+  "SODIUM IODIDE I-131", "RADIOPHARM",
+  "PEMBROLIZUMAB", "IMMUNOTHERAPY",
+  "YTTRIUM Y-90 MICROSPHERES", "RADIOPHARM",
+  "IPILIMUMAB", "IMMUNOTHERAPY",
+  "NIVOLUMAB", "IMMUNOTHERAPY",
+  "METHOTREXATE", "CHEMO_CYTOTOXIC",
+  "EVEROLIMUS", "TARGETED_OTHER",
+  "FLUOROURACIL TOPICAL", "CHEMO_CYTOTOXIC",
+  "ANASTROZOLE", "HORMONAL_SUPPORTIVE_OTHER",
+  "CLADRIBINE", "CHEMO_CYTOTOXIC",
+  "LETROZOLE", "HORMONAL_SUPPORTIVE_OTHER",
+  "BICALUTAMIDE", "HORMONAL_SUPPORTIVE_OTHER",
+  "DEGARELIX", "HORMONAL_SUPPORTIVE_OTHER",
+  "RALOXIFENE", "HORMONAL_SUPPORTIVE_OTHER",
+  "IMATINIB", "TARGETED_OTHER",
+  "SUNITINIB", "ANTI_VEGF_ANGIO",
+  "SODIUM IODIDE I-131 MIBG", "RADIOPHARM",
+  "LUTETIUM LU-177 DOTATATE", "RADIOPHARM",
+  "DOXORUBICIN", "CHEMO_CYTOTOXIC",
+  "PACLITAXEL", "CHEMO_CYTOTOXIC",
+  "CYTARABINE", "CHEMO_CYTOTOXIC",
+  "CARMUSTINE", "CHEMO_CYTOTOXIC",
+  "MELPHALAN", "CHEMO_CYTOTOXIC",
+  "EXEMESTANE", "HORMONAL_SUPPORTIVE_OTHER",
+  "ATEZOLIZUMAB", "IMMUNOTHERAPY",
+  "HYDROXYUREA", "CHEMO_CYTOTOXIC",
+  "AZACITIDINE", "CHEMO_CYTOTOXIC",
+  "LEUPROLIDE", "HORMONAL_SUPPORTIVE_OTHER",
+  "ENCORAFENIB", "TARGETED_OTHER",
+  "BLEOMYCIN", "CHEMO_CYTOTOXIC",
+  "DACTINOMYCIN", "CHEMO_CYTOTOXIC",
+  "IFOSFAMIDE", "CHEMO_CYTOTOXIC",
+  "TEMOZOLOMIDE", "CHEMO_CYTOTOXIC",
+  "FULVESTRANT", "HORMONAL_SUPPORTIVE_OTHER",
+  "PALBOCICLIB", "TARGETED_OTHER",
+  "TAMOXIFEN", "HORMONAL_SUPPORTIVE_OTHER",
+  "PAZOPANIB", "ANTI_VEGF_ANGIO",
+  "PACLITAXEL PROTEIN-BOUND", "CHEMO_CYTOTOXIC",
+  "RAMUCIRUMAB", "ANTI_VEGF_ANGIO",
+  "MERCAPTOPURINE", "CHEMO_CYTOTOXIC",
+  "RUXOLITINIB", "TARGETED_OTHER",
+  "PACRITINIB", "TARGETED_OTHER",
+  "GOSERELIN", "HORMONAL_SUPPORTIVE_OTHER",
+  "PROCARBAZINE", "CHEMO_CYTOTOXIC",
+  "LENALIDOMIDE", "TARGETED_OTHER",
+  "DOCETAXEL", "CHEMO_CYTOTOXIC",
+  "ABIRATERONE", "HORMONAL_SUPPORTIVE_OTHER",
+  "APALUTAMIDE", "HORMONAL_SUPPORTIVE_OTHER",
+  "CABAZITAXEL", "CHEMO_CYTOTOXIC",
+  "OLAPARIB", "TARGETED_OTHER",
+  "TUCATINIB", "TARGETED_OTHER",
+  "ASPARAGINASE ESCHERICHIA COLI", "CHEMO_CYTOTOXIC",
+  "PEGASPARGASE", "CHEMO_CYTOTOXIC",
+  "ALEMTUZUMAB", "IMMUNOTHERAPY",
+  "PEMETREXED", "CHEMO_CYTOTOXIC",
+  "ADO-TRASTUZUMAB EMTANSINE", "TARGETED_OTHER",
+  "PERTUZUMAB", "TARGETED_OTHER",
+  "BRENTUXIMAB VEDOTIN", "IMMUNOTHERAPY",
+  "MITOXANTRONE", "CHEMO_CYTOTOXIC",
+  "OBINUTUZUMAB", "IMMUNOTHERAPY",
+  "ENZALUTAMIDE", "HORMONAL_SUPPORTIVE_OTHER",
+  "TALAZOPARIB", "TARGETED_OTHER",
+  "ERLOTINIB", "TARGETED_OTHER",
+  "IBRUTINIB", "TARGETED_OTHER",
+  "DAROLUTAMIDE", "HORMONAL_SUPPORTIVE_OTHER",
+  "LAPATINIB", "TARGETED_OTHER",
+  "BCG", "HORMONAL_SUPPORTIVE_OTHER",
+  "LENVATINIB", "ANTI_VEGF_ANGIO",
+  "BINIMETINIB", "TARGETED_OTHER",
+  "FAM-TRASTUZUMAB DERUXTECAN", "TARGETED_OTHER",
+  "DOXORUBICIN LIPOSOMAL", "CHEMO_CYTOTOXIC",
+  "VINORELBINE", "CHEMO_CYTOTOXIC",
+  "RADIUM RA-223 DICHLORIDE", "RADIOPHARM",
+  "TRETINOIN", "HORMONAL_SUPPORTIVE_OTHER",
+  "NIRAPARIB", "TARGETED_OTHER",
+  "CARFILZOMIB", "TARGETED_OTHER",
+  "CABOZANTINIB", "ANTI_VEGF_ANGIO",
+  "SOTORASIB", "TARGETED_OTHER",
+  "CERITINIB", "TARGETED_OTHER",
+  "RIBOCICLIB", "TARGETED_OTHER",
+  "ACALABRUTINIB", "TARGETED_OTHER",
+  "THIOTEPA", "CHEMO_CYTOTOXIC",
+  "BENDAMUSTINE", "CHEMO_CYTOTOXIC",
+  "CRIZOTINIB", "TARGETED_OTHER",
+  "VISMODEGIB", "TARGETED_OTHER",
+  "AFLIBERCEPT OPHTHALMIC", "ANTI_VEGF_ANGIO",
+  "SELPERCATINIB", "TARGETED_OTHER",
+  "NERATINIB", "TARGETED_OTHER",
+  "VENETOCLAX", "TARGETED_OTHER",
+  "DARATUMUMAB", "IMMUNOTHERAPY",
+  "POMALIDOMIDE", "TARGETED_OTHER",
+  "IRINOTECAN LIPOSOMAL", "CHEMO_CYTOTOXIC",
+  "DASATINIB", "TARGETED_OTHER",
+  "PONATINIB", "TARGETED_OTHER",
+  "BLINATUMOMAB", "IMMUNOTHERAPY",
+  "LAROTRECTINIB", "TARGETED_OTHER",
+  "DURVALUMAB", "IMMUNOTHERAPY",
+  "NILOTINIB", "TARGETED_OTHER",
+  "AVELUMAB", "IMMUNOTHERAPY",
+  "ENFORTUMAB VEDOTIN", "IMMUNOTHERAPY",
+  "RUCAPARIB", "TARGETED_OTHER",
+  "DAUNORUBICIN", "CHEMO_CYTOTOXIC",
+  "GEMTUZUMAB OZOGAMICIN", "IMMUNOTHERAPY",
+  "BUSULFAN", "CHEMO_CYTOTOXIC",
+  "CLOFARABINE", "CHEMO_CYTOTOXIC",
+  "THIOGUANINE", "CHEMO_CYTOTOXIC",
+  "IVOSIDENIB", "TARGETED_OTHER",
+  "PENTOSTATIN", "CHEMO_CYTOTOXIC",
+  "SORAFENIB", "ANTI_VEGF_ANGIO",
+  "BORTEZOMIB", "TARGETED_OTHER",
+  "DARATUMUMAB-HYALURONIDASE", "IMMUNOTHERAPY",
+  "HYALURONIDASE-RITUXIMAB", "IMMUNOTHERAPY",
+  "BRIGATINIB", "TARGETED_OTHER",
+  "IXAZOMIB", "TARGETED_OTHER",
+  "EPIRUBICIN", "CHEMO_CYTOTOXIC",
+  "ROMIDEPSIN", "CHEMO_CYTOTOXIC",
+  "TOPOTECAN", "CHEMO_CYTOTOXIC",
+  "VINBLASTINE", "CHEMO_CYTOTOXIC",
+  "OFATUMUMAB", "IMMUNOTHERAPY",
+  "ENTRECTINIB", "TARGETED_OTHER",
+  "POLATUZUMAB VEDOTIN", "IMMUNOTHERAPY",
+  "EPCORITAMAB", "IMMUNOTHERAPY"
+)
+
+# join the treatments to the initial drug mapping
+CRC_tx <- CRC_tx |> 
+  left_join(drug_moa, by = c("AGENT" = "drug"))
+```
+
+```{r Create survival cohort}
+# only doing metastatic CRC, makes it easier to control for differential treatment assignments 
+
+metaCRC_patients <- CRC_clinical |> 
+  filter(METASTATIC_SITE != "Not Applicable") |> 
+  dplyr::select(PATIENT_ID) |> 
+  dplyr::pull()
+
+Survival_patients <- CRC_tx |> 
+  filter(PATIENT_ID %in% metaCRC_patients) |> 
+  dplyr::select(PATIENT_ID) |> 
+  dplyr::pull()
+
+CRC_tx <- CRC_tx |> 
+  filter(PATIENT_ID %in% metaCRC_patients)
+
+CRC_diagnosis <- CRC_diagnosis |> 
+  filter(PATIENT_ID %in% Survival_patients)
+
+# find duplicated rows, some have same CRC diagnosis split into different parts of intestine, some also have lung cancer in this data set, need to take the lung cancer diagnoses out since that date is not important
+
+dupe_rows <- CRC_diagnosis |>
+  group_by(PATIENT_ID) |>
+  filter(n() > 1) |>
+  ungroup() |> 
+  dplyr::select(PATIENT_ID, START_DATE, DX_DESCRIPTION) |>
+  mutate(CRC_yes = case_when(str_detect(DX_DESCRIPTION, "COLON|RECTUM|RECTOSIGMOID") ~ 1,
+                             TRUE ~ 0)) |> 
+  filter(CRC_yes == 1) |> 
+  group_by(PATIENT_ID) |>
+  mutate(keepThis = case_when(
+    n() == 1 ~ TRUE,
+    n() > 1 & min(START_DATE) == max(START_DATE) & row_number() == 1 ~ TRUE,
+    n() > 1 & min(START_DATE) != max(START_DATE) ~ TRUE, 
+    TRUE ~ FALSE
+  )) |> 
+  ungroup() |> dplyr::select(-CRC_yes)
+
+# final CRC diagnosis set, now only has relevant CRC diagnosis (metastatic)
+CRC_diagnosis <- CRC_diagnosis |> 
+  left_join(dupe_rows, by = c("PATIENT_ID", "START_DATE", "DX_DESCRIPTION")) |> 
+  filter(keepThis == TRUE | is.na(keepThis)) |> dplyr::select(-keepThis)
+
+# now need to identify the unique start dates of the patient diagnosis (same diagnosis of multiple areas on the same day count as one diagnosis of CRC on that day)
+dx_all_days_per_patient <- CRC_diagnosis |>
+  group_by(PATIENT_ID) |>
+  summarise(
+    dx_days_from_seq = list(sort(unique(START_DATE))),
+    n_dx = n_distinct(START_DATE),
+    .groups = "drop"
+  )
+
+# using the diagnosis and start dates of diagnosis and joining into the treatment data set 
+try_tx_filtering <- left_join(CRC_tx, dx_all_days_per_patient, by = "PATIENT_ID")
+
+# patients have many treatments at different time intervals, this chooses the proper diagnosis date that corresponds with the proper firstline treatment. For example, they could have been treated for lung cancer two years ago, but that counts as the first line unless it is filtered out 
+dx_chosen <- try_tx_filtering |>
+  distinct(PATIENT_ID, dx_days_from_seq, START_DATE) |>
+  group_by(PATIENT_ID) |>
+  summarise(
+    first_tx_day = suppressWarnings(min(as.numeric(START_DATE), na.rm = TRUE)),
+    dx_list = list(
+      as.numeric(str_trim(str_extract_all(dx_days_from_seq, "-?\\d+")[[1]]))
+    ),
+    dx_day = {
+      d <- dx_list[[1]]
+      d_ok <- d[!is.na(d) & d <= first_tx_day]
+      if (length(d_ok) == 0) NA_real_ else max(d_ok)
+    },
+    .groups = "drop"
+  )
+
+# choose the firstline treatment as the earliest treatment ON or AFTER the diagnosis date  
+firstline_tx <- try_tx_filtering |>
+  left_join(dx_chosen |> dplyr::select(PATIENT_ID, dx_day), by = "PATIENT_ID") |>
+  mutate(START_DATE = as.numeric(START_DATE)) |>
+  filter(!is.na(dx_day)) |>
+  group_by(PATIENT_ID) |>
+  filter(START_DATE >= dx_day) |>
+  mutate(first1l_day = min(START_DATE, na.rm = TRUE)) |>
+  filter(START_DATE == first1l_day) |>
+  ungroup()
+
+# summary of the regimen started on firstline treatment (i.e. started chemo and a targeted agent in tandem)
+firstline_regimen <- firstline_tx |>
+  group_by(PATIENT_ID) |>
+  summarise(
+    dx_day = first(dx_day),
+    first1l_day = first(first1l_day),
+    agents = paste(sort(unique(AGENT)), collapse = " + "),
+    moas   = paste(sort(unique(moa)), collapse = " + "),
+    .groups = "drop"
+  )
+
+# joining clinical and firstline regimen data 
+CRC_clinical <- left_join(firstline_regimen, CRC_clinical, by = "PATIENT_ID")
+
+# final making sure that it is the metastatic patients and only CRC-related rows 
+CRC_clinical <- CRC_clinical |> filter(CANCER_TYPE == "Colorectal Cancer") |> filter (PATIENT_ID %in% metaCRC_patients)
+
+# Create moa_grp from moas combinations
+CRC_clinical <- CRC_clinical |>
+  mutate(moa_grp = case_when(
+    moas == "CHEMO_CYTOTOXIC" ~ "CHEMO",
+    moas == "ANTI_VEGF_ANGIO + CHEMO_CYTOTOXIC" ~ "CHEMO+VEGF",
+    moas == "ANTI_EGFR + CHEMO_CYTOTOXIC" ~ "CHEMO+EGFR",
+    moas %in% c("IMMUNOTHERAPY") ~ "IO",
+    TRUE ~ "OTHER"
+  ))
+
+CRC_clinical <- CRC_clinical |>
+  mutate(moa_consolidated = case_when(
+    moa_grp == "CHEMO" ~ "Chemo",
+    moa_grp %in% c("CHEMO+VEGF", "CHEMO+EGFR") ~ "Chemo+Targeted",
+    moa_grp %in% c("IO", "OTHER") ~ "Other/IO",
+    TRUE ~ NA_character_
+  ))
+
+table(CRC_clinical$moa_consolidated)
+```
+
+```{r Top genes and mutations}
+# Get mutation frequency for all genes
+mutationFreq <- CRC_muts |>
+     group_by(Hugo_Symbol) |>
+     summarise(nPats = n_distinct(PATIENT_ID), .groups = "drop") |>
+     arrange(desc(nPats))
+
+head(mutationFreq, 15)
+
+# Choose top 10 genes (chose 10 arbitrarily, can choose a different number too)
+topGenes <- mutationFreq |>
+     head(10) |>
+     pull(Hugo_Symbol)
+
+print(topGenes)
+
+mutationGenes <- topGenes
+
+# matrix of mutations by patient
+mutMat <- CRC_muts |>
+  distinct(PATIENT_ID, Hugo_Symbol) |>
+  pivot_wider(
+    names_from = Hugo_Symbol,
+    values_from = Hugo_Symbol,
+    values_fill = NA
+  ) |>
+  # Convert to binary (1 = mutation)
+  mutate(across(all_of(mutationGenes),
+                ~ifelse(!is.na(.), 1, 0), 
+                .names = "{.col}_mut"))
+
+# Join mutations to clinical data
+survDF<- CRC_clinical |>
+  left_join(mutMat |> dplyr::select(PATIENT_ID, ends_with("_mut")), 
+            by = "PATIENT_ID") |>
+  # Set NA mutations to 0 
+  mutate(across(ends_with("_mut"), 
+                ~replace_na(., 0))) |>
+  # Create survival event indicator
+  mutate(
+    OS_event = as.numeric(OS_STATUS == "1:DECEASED"),
+    OS_time = OS_MONTHS - (first1l_day / 30.44) # time 0 is start of first 1L regimen! 
+  ) |>
+  # Remove rows with missing time or event data
+  filter(!is.na(OS_time) & !is.na(OS_event) & OS_time > 0)
+
+# check for mutation prevalence in cohort
+survDF |>
+  summarise(across(ends_with("_mut"), 
+                   list(n = ~sum(., na.rm = TRUE),
+                        pct = ~mean(., na.rm = TRUE) * 100),
+                   .names = "{.col}_{.fn}")) |>
+  t() |>
+  print()
+
+# Add transformed variables, done after linearity assumption check 
+survDF <- survDF |> 
+  mutate(ageSquared = CURRENT_AGE_DEID^2, 
+                           logMSI = log(MSI_SCORE + 1), 
+                           logTMB = log(TMB_NONSYNONYMOUS + 1), 
+                           logMSISquared = logMSI^2, 
+                           logTMBSquared = logTMB^2) |> 
+  filter(!is.na(MSI_SCORE)) |>
+  filter(MSI_SCORE != -1)
+```
+
+```{r Simple Cox Univariate Model}
+
+# create a list of results for the univar models I am running
+uniRes <- list()
+
+# for loop to build a model for each gene in top N gene list (choosing top 10 for now)
+for (gene in mutationGenes) {
+  geneVar <- paste0(gene, "_mut")
+   
+  modelFormula <- as.formula(paste(
+    "Surv(OS_time, OS_event) ~", geneVar, 
+    "+ moa_consolidated +", geneVar, ":moa_consolidated",
+    "+ CURRENT_AGE_DEID + ageSquared + GENDER + RACE + STAGE_HIGHEST_RECORDED"
+  ))   
+  
+  cox <- coxph(modelFormula, data = survDF)
+  
+  uniRes[[gene]] <- list(
+    model = cox,
+    summary = summary(cox)
+  )
+}
+```
+
+```{r Improved Univariate Cox Model}
+# improved (hopefully) univar res list with MSI and TMB 
+uniRes_improved <- list()
+
+for (gene in mutationGenes) {
+  geneVar <- paste0(gene, "_mut")
+  
+  modelFormula <- as.formula(paste(
+    "Surv(OS_time, OS_event) ~", geneVar, 
+    "+ moa_consolidated +", geneVar, ":moa_consolidated",
+    "+ CURRENT_AGE_DEID + ageSquared + GENDER + RACE + STAGE_HIGHEST_RECORDED",
+    " + logMSI + logTMB + logMSISquared + logTMBSquared" 
+  ))
+  
+  cox <- coxph(modelFormula, data = survDF)
+  
+  uniRes_improved[[gene]] <- list(
+    model = cox,
+    summary = summary(cox)
+  )
+}
+```
+
+```{r Stratified Analysis }
+# create groups array and results list
+moa_groups <- unique(survDF$moa_consolidated)
+stratRes <- list()
+
+# for loop creating each model by moa group
+for (moa in moa_groups) {
+  survDF_subset <- survDF |> filter(moa_consolidated == moa)
+  
+  stratGeneRes <- list()
+  
+  for (gene in mutationGenes) {
+    geneVar <- paste0(gene, "_mut")
+    
+    # Model: gene + age + sex + stage + MSI + TMB
+    modelForm <- as.formula(paste(
+      "Surv(OS_time, OS_event) ~", geneVar,
+      "+ CURRENT_AGE_DEID + ageSquared + GENDER + RACE + STAGE_HIGHEST_RECORDED  + logMSI + logTMB + logMSISquared + logTMBSquared"
+    ))
+    
+    cox <- coxph(modelForm, data = survDF_subset)
+    
+    stratGeneRes[[gene]] <- summary(cox)
+    
+    # get HR for each moa by mutation
+    cat("Gene:", gene, "| HR:", 
+        round(summary(cox)$conf.int[1, 1], 3), 
+        "| p-value:", 
+        round(summary(cox)$coefficients[1, 5], 4), "\n")
+  }
+  
+  stratRes[[moa]] <- stratGeneRes
+}
+```
+
+```{r Interaction Terms Analysis}
+
+ixRes <- tibble()
+
+for (gene in mutationGenes) {
+  coxSumm <- uniRes_improved[[gene]]$summary
+  
+  # get covar results
+  coef_df <- as.data.frame(coxSumm$coefficients) |>
+    rownames_to_column("Variable") |>
+    as_tibble() |>
+    mutate(Gene = gene) |>
+    # only choose the interaction terms
+    filter(str_detect(Variable, ":moa_consolidated"))
+  
+  ixRes <- bind_rows(ixRes, coef_df)
+}
+
+# create ix table
+ixTab <- ixRes |>
+  dplyr::select(Gene, Variable, coef, `exp(coef)`, `se(coef)`, `z`, `Pr(>|z|)`) |>
+  rename(
+    HR = `exp(coef)`,
+    SE = `se(coef)`,
+    Z_stat = `z`,
+    P_value = `Pr(>|z|)`,
+    Interaction_Term = Variable
+  ) |>
+  mutate(
+    CI_lower = exp(coef - 1.645 * SE),
+    CI_upper = exp(coef + 1.645 * SE),
+    Significant = ifelse(P_value < 0.1, "YES", "NO"),
+    # added interpretaton for ix term
+    Interpretation = case_when(
+      P_value < 0.1 & HR > 1 ~ "Mutation effect AMPLIFIED in this treatment",
+      P_value < 0.1 & HR < 1 ~ "Mutation effect ATTENUATED in this treatment",
+      P_value >= 0.1 ~ "No significant interaction"
+    )
+  ) |>
+  dplyr::select(Gene, Interaction_Term, HR, CI_lower, CI_upper, P_value, Significant, Interpretation) |>
+  arrange(P_value)
+
+# FDR correction
+ixTab <- ixTab |>
+  mutate(
+    # FDR correction
+    P_value_fdr = p.adjust(P_value, method = "BH"),
+    
+    # Flag significance for uncorrected and corrected (FDR)
+    Sig_Uncorrected = ifelse(P_value < 0.05, "YES", "NO"),
+    Sig_FDR = ifelse(P_value_fdr < 0.05, "YES", "NO")
+  ) |>
+  dplyr::select(
+    Gene, Interaction_Term, HR, CI_lower, CI_upper,
+    P_value, P_value_fdr,
+    Sig_Uncorrected, Sig_FDR,
+    Interpretation
+  ) |>
+  arrange(P_value)
+
+print(ixTab)
+
+cat("Total tests:", nrow(ixTab), "\n")
+cat("Significant at uncorrected p < 0.05:", sum(ixTab$Sig_Uncorrected == "YES"), "\n")
+cat("Significant at FDR p < 0.05:", sum(ixTab$Sig_FDR == "YES"), "\n\n")
+
+# Show which remain robust after correction
+robust_findings <- ixTab |>
+  filter(Sig_FDR == "YES") |>
+  dplyr::select(Gene, Interaction_Term, HR, P_value, P_value_fdr)
+
+if (nrow(robust_findings) > 0) {
+  cat("ROBUST FINDINGS (significant after FDR correction):\n\n")
+  print(robust_findings)
+} else {
+  cat("No findings remain significant after FDR correction.\n")
+  nominal <- ixTab |>
+    filter(Sig_Uncorrected == "YES") |>
+    dplyr::select(Gene, Interaction_Term, HR, P_value, P_value_fdr)
+  if (nrow(nominal) > 0) {
+    print(nominal)
+  } else {
+    cat("No nominally significant findings (p < 0.05).\n")
+  }
+}
+
+cat("\n")
+
+sigIX <- ixTab |>
+  filter(Sig_Uncorrected == "YES") |>
+  arrange(P_value)
+
+if (nrow(sigIX) > 0) {
+  cat("Uncorrected significant interactions (p < 0.05):\n")
+  print(sigIX |> dplyr::select(Gene, HR, CI_lower, CI_upper, P_value, P_value_fdr))
+} else {
+  cat("No uncorrected significant interactions (p < 0.05)\n")
+}
+```
+
+```{r Stratified HR Results}
+
+stratHR <- tibble()
+
+# for loop to go through each gene and get the HRs and p-vals 
+for (treatment in names(stratRes)) {
+  for (gene in names(stratRes[[treatment]])) {
+    
+    summary_obj <- stratRes[[treatment]][[gene]]
+    
+    # Extract HR and p-value
+    hr <- summary_obj$conf.int[1, 1]
+    hr_lower <- summary_obj$conf.int[1, 3]
+    hr_upper <- summary_obj$conf.int[1, 4]
+    p_val <- summary_obj$coefficients[1, 5]
+    
+    stratHR <- bind_rows(
+      stratHR,
+      tibble(
+        Gene = gene,
+        Treatment = treatment,
+        HR = hr,
+        CI_lower = hr_lower,
+        CI_upper = hr_upper,
+        P_value = p_val
+      )
+    )
+  }
+}
+
+# pivot wider, treatments now next to each other 
+stratified_wide <- stratHR |>
+  pivot_wider(
+    names_from = Treatment,
+    values_from = c(HR, CI_lower, CI_upper, P_value),
+    names_glue = "{Treatment}_{.value}"
+  ) |>
+  dplyr::select(Gene, starts_with("Chemo_"), starts_with("Chemo+"), starts_with("Other"))
+
+print(stratified_wide)
+
+# genes with largest HR diff by moa group
+hr_comparison <- stratHR |>
+  dplyr::select(Gene, Treatment, HR) |>
+  pivot_wider(
+    names_from = Treatment,
+    values_from = HR
+  ) |>
+  mutate(
+    Chemo_vs_ChemoTargeted = ifelse(!is.na(Chemo) & !is.na(`Chemo+Targeted`),
+                                     abs(log(Chemo) - log(`Chemo+Targeted`)), 
+                                     NA),
+    Chemo_vs_OtherIO = ifelse(!is.na(Chemo) & !is.na(`Other/IO`),
+                              abs(log(Chemo) - log(`Other/IO`)), 
+                              NA),
+    ChemoTargeted_vs_OtherIO = ifelse(!is.na(`Chemo+Targeted`) & !is.na(`Other/IO`),
+                                      abs(log(`Chemo+Targeted`) - log(`Other/IO`)), 
+                                      NA)
+  ) |>
+  arrange(desc(Chemo_vs_ChemoTargeted), desc(Chemo_vs_OtherIO))
+
+cat("Genes with largest HR differences across treatment groups:\n\n")
+print(hr_comparison)
+```
+
+```{r Prop. Hazards Assumptions Testing}
+
+# Test Prop. Haz assumption on a few models, chose top significant genes 
+test_genes <- mutationGenes
+
+ph_results <- tibble()
+
+for (gene in test_genes) {
+  # get univar model with interaction
+  model <- uniRes_improved[[gene]]$model
+  
+  # test Prop. Haz assumption
+  ph_test <- cox.zph(model)
+  
+  cat("Gene:", gene, "\n")
+  print(ph_test)
+  cat("\n")
+  
+  # Extract p-values and store
+  ph_results <- bind_rows(
+    ph_results,
+    tibble(
+      Gene = gene,
+      Variable = rownames(ph_test$table),
+      ChiSq = ph_test$table[, "chisq"],
+      P_value = ph_test$table[, "p"]
+    )
+  )
+}
+```
+
+```{r Stratified by Time (early v later follow-up) Analysis}
+
+# Landmark analysis at median follow-up
+
+median_fu <- median(survDF$OS_time, na.rm = TRUE)
+
+# Early period: time 0 to median
+survDF_early <- survDF |>
+  filter(OS_time <= median_fu) |>
+  mutate(OS_time_early = OS_time)
+
+# Late period: patients alive at median
+survDF_late <- survDF |>
+  filter(OS_time > median_fu) |>
+  mutate(
+    OS_time_late = OS_time - median_fu,
+    OS_event_late = OS_event
+  )
+
+# Initialize results tibble
+landmark_results <- tibble()
+
+# Fit separate models for early and late periods
+for (gene in c(mutationGenes )) {
+  geneVar <- paste0(gene, "_mut")
+  
+  # EARLY
+  cox_early <- coxph(
+    as.formula(paste(
+      "Surv(OS_time_early, OS_event) ~", geneVar, 
+      "+ moa_consolidated +", geneVar, ":moa_consolidated",
+      "+ CURRENT_AGE_DEID + ageSquared + GENDER + RACE + STAGE_HIGHEST_RECORDED",
+      "+ logMSI + logTMB + logMSISquared + logTMBSquared"
+    )),
+    data = survDF_early
+  )
+  
+  # LATE
+  cox_late <- coxph(
+    as.formula(paste(
+      "Surv(OS_time_late, OS_event_late) ~", geneVar, 
+      "+ moa_consolidated +", geneVar, ":moa_consolidated",
+      "+ CURRENT_AGE_DEID + ageSquared + GENDER + RACE + STAGE_HIGHEST_RECORDED",
+      "+ logMSI + logTMB + logMSISquared + logTMBSquared"
+    )),
+    data = survDF_late
+  )
+  
+  # Extract interaction coefficients for early period
+  early_summary <- as.data.frame(summary(cox_early)$coefficients) |>
+    rownames_to_column("Variable") |>
+    filter(str_detect(Variable, ":moa_consolidated")) |>
+    mutate(
+      Gene = gene,
+      Period = "Early",
+      HR = `exp(coef)`,
+      SE = `se(coef)`,
+      P_value = `Pr(>|z|)`,
+      CI_lower = exp(coef - 1.96 * SE),
+      CI_upper = exp(coef + 1.96 * SE)
+    ) |>
+    select(Gene, Period, Variable, HR, CI_lower, CI_upper, P_value)
+  
+  # Extract interaction coefficients for late period
+  late_summary <- as.data.frame(summary(cox_late)$coefficients) |>
+    rownames_to_column("Variable") |>
+    filter(str_detect(Variable, ":moa_consolidated")) |>
+    mutate(
+      Gene = gene,
+      Period = "Late",
+      HR = `exp(coef)`,
+      SE = `se(coef)`,
+      P_value = `Pr(>|z|)`,
+      CI_lower = exp(coef - 1.96 * SE),
+      CI_upper = exp(coef + 1.96 * SE)
+    ) |>
+    select(Gene, Period, Variable, HR, CI_lower, CI_upper, P_value)
+  
+  # Bind to results
+  landmark_results <- bind_rows(
+    landmark_results,
+    early_summary,
+    late_summary
+  )
+}
+
+# Apply FDR correction to these 4 tests
+landmark_results <- landmark_results |>
+  mutate(
+    P_value_fdr = p.adjust(P_value, method = "BH"),
+    Significant = ifelse(P_value_fdr < 0.05, "YES", "NO")
+  ) |>
+  arrange(P_value_fdr)
+
+
+cat("Median follow-up:", round(median_fu, 1), "months\n")
+cat("FDR correction applied overall\n\n")
+
+print(landmark_results |>
+  select(Gene, Period, Variable, HR, CI_lower, CI_upper, P_value, P_value_fdr, Significant))
+
+# Display as gt table for manuscript
+landmark_results |>
+  mutate(
+    Treatment = str_remove(str_remove(Variable, ".*:moa_consolidated"), "_.*"),
+    `95% CI` = paste0("(", round(CI_lower, 2), "-", round(CI_upper, 2), ")")
+  ) |>
+  select(Gene, Period, Treatment, HR, `95% CI`, P_value, P_value_fdr, Significant) |>
+  gt() |>
+  tab_header(
+    title = "Landmark Analysis: Gene-Treatment Interactions by Follow-Up Period",
+    subtitle = paste0("Early: 0-", round(median_fu, 1), " months | Late: >", round(median_fu, 1), " months")
+  ) |>
+  fmt_number(columns = c(HR), decimals = 2) |>
+  fmt_number(columns = c(P_value, P_value_fdr), decimals = 4)
+
+
+```
+
+```{r C-Index}
+# C-index for all univar results from the improved univar model
+c_indices <- tibble()
+
+for (gene in mutationGenes) {
+  model <- uniRes_improved[[gene]]$model
+  summary_mod <- summary(model)
+  
+  c_index <- summary_mod$concordance[1]
+  c_se <- summary_mod$concordance[2]
+  
+  c_indices <- bind_rows(
+    c_indices,
+    tibble(
+      Gene = gene,
+      C_Index = round(c_index, 3),
+      SE = round(c_se, 3)
+    )
+  )
+}
+
+print(c_indices)
+
+cat("\nMean C-index across genes:", round(mean(c_indices$C_Index), 3), "\n")
+```
+
+```{r Linearity Assumption}
+# choosing the BRAF gene's model to check the assumption 
+model_adjusted <- uniRes_improved[["BRAF"]]$model
+
+# residuals
+mart_resid <- residuals(model_adjusted, type = "martingale")
+model_frame <- model.frame(model_adjusted)
+
+par(mfrow = c(1, 3))
+
+age_numeric <- model_frame$CURRENT_AGE_DEID
+plot(age_numeric, mart_resid,
+     main = "Linearity: Age",
+     xlab = "Age", ylab = "Martingale Residuals")
+abline(h = 0, lty = 2)
+lines(lowess(age_numeric, mart_resid), col = "red", lwd = 2)
+
+msi_numeric <- model_frame$logMSI
+plot(msi_numeric, mart_resid,
+     main = "Linearity: MSI Score",
+     xlab = "MSI Score", ylab = "Martingale Residuals")
+abline(h = 0, lty = 2)
+lines(lowess(msi_numeric, mart_resid), col = "red", lwd = 2)
+
+tmb_numeric <- model_frame$logTMB
+plot(tmb_numeric, mart_resid,
+     main = "Linearity: TMB",
+     xlab = "TMB Non-Synonymous", ylab = "Martingale Residuals")
+abline(h = 0, lty = 2)
+lines(lowess(tmb_numeric, mart_resid), col = "red", lwd = 2)
+
+par(mfrow = c(1, 1))
+```
+
+```{r Outlier Analysis}
+
+# deviance (standardized resids)
+deviance_residuals <- residuals(model_adjusted, type = "deviance")
+
+# flag any residuals greater than abs(3)
+outliers <- which(abs(deviance_residuals) > 3)
+n_outliers <- length(outliers)
+
+cat("Number of outliers (|deviance residual| > 3):", n_outliers, "\n")
+cat("Percentage of cohort:", round((n_outliers / nrow(survDF)) * 100, 1), "%\n")
+
+if (n_outliers > 0 && n_outliers <= 10) {
+  cat("\nOutlier patient IDs:\n")
+  print(survDF$PATIENT_ID[outliers])
+}
+
+# Plot residuals
+is_outlier <- abs(deviance_residuals) > 3
+colors <- ifelse(is_outlier, "red", "black")
+
+plot(fitted(model_adjusted), deviance_residuals,
+     main = "Deviance Residuals vs Fitted Values",
+     xlab = "Fitted Values (log hazard)",
+     ylab = "Deviance Residuals",
+     col = colors)
+abline(h = 0, lty = 2)
+abline(h = c(-3, 3), lty = 3, col = "red")
+
+legend("topright", 
+       legend = c("Normal", "Outlier"),
+       col = c("black", "red"),
+       pch = 1)
+```
+
+```{r Multicollinearity Check}
+
+# make corr matrix (only numeric vars)
+numeric_vars <- survDF |>
+  dplyr::select(
+    CURRENT_AGE_DEID, ageSquared,
+    logMSI, logMSISquared,
+    logTMB, logTMBSquared,
+    ends_with("_mut"),
+    OS_time, OS_event
+  ) |>
+  drop_na()
+
+corr_matrix <- cor(numeric_vars)
+print(round(corr_matrix, 3))
+
+# Convert to long format for ggplot
+corr_long <- melt(corr_matrix) |>
+  filter(Var1 != Var2) |>  
+  filter(abs(value) > 0.7)
+
+# Create heatmap
+ggplot(corr_long, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile(color = "black", size = 0.5) +
+  geom_text(aes(label = round(value, 2)), color = "black", size = 3) +
+  scale_fill_gradient2(low = "lightblue", mid = "white", high = "red",
+                       limits = c(-1, 1), midpoint = 0) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.text.y = element_text(size = 10),
+        axis.title = element_blank()) +
+  labs(title = "Correlation Matrix Heatmap (selected correlations > 0.7)",
+       fill = "Correlation")
+```
+
+```{r Bootstrap CIs}
+
+bootstrap_one_gene <- function(data, gene_name, indices) {
+  boot_data <- data[indices, ]
+  geneVar <- paste0(gene_name, "_mut")
+  
+  model_boot <- coxph(
+    as.formula(paste(
+      "Surv(OS_time, OS_event) ~", geneVar,
+      "+ moa_consolidated +", geneVar, ":moa_consolidated",
+      "+ CURRENT_AGE_DEID + ageSquared + GENDER + RACE + STAGE_HIGHEST_RECORDED",
+      "+ logMSI + logMSISquared + logTMB + logTMBSquared"
+    )),
+    data = boot_data
+  )
+  
+  coef_boot <- coef(model_boot)
+  ix_pos <- grep(":moa_consolidated", names(coef_boot))
+  return(exp(coef_boot[ix_pos]))
+}
+
+set.seed(107)
+
+boot_ci_all_genes <- tibble()
+
+for (gene in c("BRAF", "APC", "PIK3CA", "SMAD4")) { 
+  
+  cat("Bootstrapping:", gene, "...\n")
+  
+  boot_res <- boot(survDF, bootstrap_one_gene, R = 250, gene_name = gene)
+  
+  for (i in 1:length(boot_res$t0)) {
+    interaction_name <- names(boot_res$t0)[i]
+    
+    ci_lower <- quantile(boot_res$t[, i], 0.025, na.rm = TRUE)
+    ci_upper <- quantile(boot_res$t[, i], 0.975, na.rm = TRUE)
+    point_est <- boot_res$t0[i]
+    n_na <- sum(is.na(boot_res$t[, i]))
+    
+    boot_ci_all_genes <- bind_rows(
+      boot_ci_all_genes,
+      tibble(
+        Gene = gene,
+        Interaction = interaction_name,
+        `Point HR` = round(point_est, 3),
+        `CI Lower` = round(ci_lower, 3),
+        `CI Upper` = round(ci_upper, 3),
+        `95% CI` = paste0(round(ci_lower, 3), "-", round(ci_upper, 3)),
+        `Failed Boots` = n_na,
+        Robust = ifelse(ci_lower > 1 | ci_upper < 1, "YES", "NO")
+      )
+    )
+  }
+}
+
+print(boot_ci_all_genes)
+```
+
+```{r Sensitivity Analysis- Removing Outliers}
+
+deviance_resid <- residuals(model_adjusted, type = "deviance")
+outlier_indices <- which(abs(deviance_resid) > 3)
+n_outliers <- length(outlier_indices)
+pct_outliers <- (n_outliers / nrow(survDF)) * 100
+
+cat("Number of outliers:", n_outliers, "(", round(pct_outliers, 2), "%)\n")
+
+if (n_outliers > 0 & n_outliers <= 20) {
+  cat("Outlier patient IDs:\n")
+  print(survDF$PATIENT_ID[outlier_indices])
+  cat("\n")
+}
+
+# Create dataset without outliers
+survDF_no_outliers <- survDF[-outlier_indices, ]
+
+cat("Original sample size:", nrow(survDF), "\n")
+cat("Sample size without outliers:", nrow(survDF_no_outliers), "\n")
+cat("Patients removed:", nrow(survDF) - nrow(survDF_no_outliers), "\n\n")
+
+# Refit key gene models without outliers
+sensitivity_comparison <- tibble()
+
+for (gene in c("BRAF", "APC", "PIK3CA", "SMAD4")) {
+  
+  geneVar <- paste0(gene, "_mut")
+  
+  model_no_out <- coxph(
+    as.formula(paste(
+      "Surv(OS_time, OS_event) ~", geneVar,
+      "+ moa_consolidated +", geneVar, ":moa_consolidated",
+      "+ CURRENT_AGE_DEID + ageSquared + GENDER + RACE + STAGE_HIGHEST_RECORDED",
+      "+ logMSI + logMSISquared + logTMB + logTMBSquared"
+    )),
+    data = survDF_no_outliers
+  )
+  
+  orig_coef <- coef(uniRes_improved[[gene]]$model)
+  no_out_coef <- coef(model_no_out)
+  
+  orig_ix <- grep(":moa_consolidated", names(orig_coef))
+  no_out_ix <- grep(":moa_consolidated", names(no_out_coef))
+  
+  for (j in 1:length(orig_ix)) {
+    interaction_name <- names(orig_coef)[orig_ix[j]]
+    
+    orig_hr <- exp(orig_coef[orig_ix[j]])
+    no_out_hr <- exp(no_out_coef[no_out_ix[j]])
+    pct_change <- ((no_out_hr - orig_hr) / orig_hr) * 100
+    
+    sensitivity_comparison <- bind_rows(
+      sensitivity_comparison,
+      tibble(
+        Gene = gene,
+        Interaction = str_replace_all(interaction_name, "_mut:moa_consolidated", "") |>
+          str_replace("Chemo", "Chemo ") |> str_trim(),
+        `Original HR` = round(orig_hr, 3),
+        `No Outliers HR` = round(no_out_hr, 3),
+        `% Change` = round(pct_change, 1),
+        Stable = ifelse(abs(pct_change) < 10, "YES", "NO")
+      )
+    )
+  }
+}
+
+print(sensitivity_comparison)
+```
+
+---
+
+# ADDITIONAL ANALYSES: Addressing PH Violations and Visualization
+
+## Kaplan-Meier Curves: BRAF and PIK3CA
+
+```{r Kaplan-Meier BRAF}
+#| fig-width: 14
+#| fig-height: 6
+
+# BRAF - stratified by mutation and treatment
+survDF_braf <- survDF |>
+  mutate(
+    BRAF_Status = ifelse(BRAF_mut == 1, "Mutant", "Wildtype"),
+    Group = paste0("BRAF ", BRAF_Status, "\n", moa_consolidated)
+  )
+
+fit_braf <- survfit(Surv(OS_time, OS_event) ~ Group, data = survDF_braf)
+
+p_braf <- ggsurvplot(
+  fit_braf,
+  data = survDF_braf,
+  risk.table = TRUE,
+  pval = TRUE,
+  conf.int = TRUE,
+  title = "Kaplan-Meier: Overall Survival by BRAF Mutation Status and Treatment",
+  xlab = "Months from Treatment Start",
+  ylab = "Overall Survival Probability",
+  legend.title = "Group",
+  ggtheme = theme_minimal()
+)
+
+print(p_braf)
+```
+
+```{r Kaplan-Meier PIK3CA}
+#| fig-width: 14
+#| fig-height: 6
+
+# PIK3CA - stratified by mutation and treatment
+survDF_pik3ca <- survDF |>
+  mutate(
+    PIK3CA_Status = ifelse(PIK3CA_mut == 1, "Mutant", "Wildtype"),
+    Group = paste0("PIK3CA ", PIK3CA_Status, "\n", moa_consolidated)
+  )
+
+fit_pik3ca <- survfit(Surv(OS_time, OS_event) ~ Group, data = survDF_pik3ca)
+
+p_pik3ca <- ggsurvplot(
+  fit_pik3ca,
+  data = survDF_pik3ca,
+  risk.table = TRUE,
+  pval = TRUE,
+  conf.int = TRUE,
+  title = "Kaplan-Meier: Overall Survival by PIK3CA Mutation Status and Treatment",
+  xlab = "Months from Treatment Start",
+  ylab = "Overall Survival Probability",
+  legend.title = "Group",
+  ggtheme = theme_minimal()
+)
+
+print(p_pik3ca)
+```
+
+---
+
+## Restricted Mean Survival Time (RMST) Analysis
+
+
+## Restricted Mean Survival Time (RMST) Analysis
+```{r RMST Analysis - requires survRM2}
+#| warning: false
+#| message: false
+
+library(survRM2)
+
+cat("\n=== RESTRICTED MEAN SURVIVAL TIME (RMST) ANALYSIS ===\n")
+cat("RMST measures average survival over a restricted time period.\n")
+cat("Does NOT assume proportional hazards.\n\n")
+
+rmst_results <- tibble()
+
+# Compare BRAF mutant vs WT in each treatment group
+for (moa_group in unique(survDF$moa_consolidated)) {
+  
+  df_subset <- survDF |> 
+    filter(moa_consolidated == moa_group) |>
+    filter(!is.na(BRAF_mut))
+  
+  if (nrow(df_subset) < 10) next
+  
+  # Calculate tau separately for each subset (min of max follow-up in each arm)
+  max_time_mut <- max(df_subset$OS_time[df_subset$BRAF_mut == 1], na.rm = TRUE)
+  max_time_wt <- max(df_subset$OS_time[df_subset$BRAF_mut == 0], na.rm = TRUE)
+  tau_subset <- min(max_time_mut, max_time_wt) * 0.9  # Use 90% of minimum max time
+  
+  if (tau_subset <= 0) next
+  
+  cat("===== BRAF in", moa_group, "=====\n")
+  cat("Tau (restricted time):", round(tau_subset, 1), "months\n")
+  
+  rmst_braf <- rmst2(
+    time = df_subset$OS_time,
+    status = df_subset$OS_event,
+    arm = df_subset$BRAF_mut,
+    tau = tau_subset
+  )
+  
+  print(rmst_braf)
+  cat("\n")
+  
+  rmst_results <- bind_rows(
+    rmst_results,
+    tibble(
+      Gene = "BRAF",
+      Treatment = moa_group,
+      Tau_Months = round(tau_subset, 1),
+      RMST_Diff = rmst_braf$unadjusted.result[1, 1],
+      RMST_SE = rmst_braf$unadjusted.result[1, 2],
+      P_value = rmst_braf$unadjusted.result[1, 4]
+    )
+  )
+}
+
+cat("\n")
+
+# Compare PIK3CA mutant vs WT in each treatment group
+for (moa_group in unique(survDF$moa_consolidated)) {
+  
+  df_subset <- survDF |> 
+    filter(moa_consolidated == moa_group) |>
+    filter(!is.na(PIK3CA_mut))
+  
+  if (nrow(df_subset) < 10) next
+  
+  # Calculate tau separately for each subset
+  max_time_mut <- max(df_subset$OS_time[df_subset$PIK3CA_mut == 1], na.rm = TRUE)
+  max_time_wt <- max(df_subset$OS_time[df_subset$PIK3CA_mut == 0], na.rm = TRUE)
+  tau_subset <- min(max_time_mut, max_time_wt) * 0.9
+  
+  if (tau_subset <= 0) next
+  
+  cat("===== PIK3CA in", moa_group, "=====\n")
+  cat("Tau (restricted time):", round(tau_subset, 1), "months\n")
+  
+  rmst_pik3ca <- rmst2(
+    time = df_subset$OS_time,
+    status = df_subset$OS_event,
+    arm = df_subset$PIK3CA_mut,
+    tau = tau_subset
+  )
+  
+  print(rmst_pik3ca)
+  cat("\n")
+  
+  rmst_results <- bind_rows(
+    rmst_results,
+    tibble(
+      Gene = "PIK3CA",
+      Treatment = moa_group,
+      Tau_Months = round(tau_subset, 1),
+      RMST_Diff = rmst_pik3ca$unadjusted.result[1, 1],
+      RMST_SE = rmst_pik3ca$unadjusted.result[1, 2],
+      P_value = rmst_pik3ca$unadjusted.result[1, 4]
+    )
+  )
+}
+
+# Display results table
+if (nrow(rmst_results) > 0) {
+  cat("\n=== RMST SUMMARY TABLE ===\n")
+  rmst_summary <- rmst_results |>
+    mutate(
+      `RMST Diff (months)` = round(RMST_Diff, 2),
+      `95% CI` = paste0("±", round(1.96 * RMST_SE, 2)),
+      `P-value` = round(P_value, 4)
+    ) |>
+    select(Gene, Treatment, Tau_Months, `RMST Diff (months)`, `95% CI`, `P-value`)
+  
+  print(rmst_summary)
+  
+  rmst_summary |>
+    gt() |>
+    tab_header(
+      title = "Table: Restricted Mean Survival Time Analysis",
+      subtitle = "Restricted to 90% of minimum max follow-up per group"
+    ) |>
+    tab_source_note("RMST Diff = difference in mean survival time (Mutant - Wildtype). Positive = mutants survive longer.")
+} else {
+  cat("No RMST results available - insufficient sample size in groups.\n")
+}
+
+```
+
+---
+
+**Key changes:**
+
+✓ `tau` calculated **separately for each gene-treatment combination**
+✓ Uses 90% of the **minimum max follow-up** between the two arms
+✓ Skips groups with insufficient data
+✓ Reports `Tau_Months` so you can see what was used
+
+This should resolve the error!
+
+---
+
+## Interaction Plots: Visualizing Gene-Treatment Patterns
+
+## Interaction Plots: Visualizing Gene-Treatment Patterns
+```{r Interaction Plots - BRAF and PIK3CA}
+#| fig-width: 12
+#| fig-height: 6
+
+# Filter stratified results for top genes (remove _mut since it's not in the data)
+interaction_plot_data <- stratHR |>
+  filter(Gene %in% c("BRAF", "PIK3CA"))
+
+# Only proceed if we have data
+if (nrow(interaction_plot_data) > 0) {
+  
+  # Plot interaction
+  p_interact <- interaction_plot_data |>
+    ggplot(aes(x = Treatment, y = log(HR), color = Gene, group = Gene)) +
+    geom_point(size = 4) +
+    geom_line(size = 1.2) +
+    geom_errorbar(aes(ymin = log(CI_lower), ymax = log(CI_upper)), 
+                  width = 0.15, size = 1) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "gray50", size = 0.8) +
+    facet_wrap(~Gene, nrow = 1) +
+    scale_color_manual(values = c("BRAF" = "#d62728", "PIK3CA" = "#2ca02c")) +
+    labs(
+      title = "Interaction Patterns: Mutation Effects Vary by Treatment",
+      x = "Treatment Mechanism of Action",
+      y = "log(Hazard Ratio)",
+      color = "Gene",
+      subtitle = "Non-parallel lines indicate gene-treatment interaction"
+    ) +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+      plot.title = element_text(face = "bold", size = 13),
+      legend.position = "bottom"
+    )
+  
+  print(p_interact)
+  
+} else {
+  cat("No data available for interaction plots\n")
+}
+```
+
+
+## AFT (Accelerated Failure Time) Models - Robustness Check
+```{r AFT Models - Weibull}
+#| warning: false
+
+cat("\n=== ACCELERATED FAILURE TIME (AFT) MODELS ===\n")
+cat("Parametric alternative to Cox PH models.\n")
+cat("More robust when PH assumption violated.\n\n")
+
+# Fit Weibull AFT models for BRAF and PIK3CA
+aft_results <- tibble()
+
+for (gene in c("BRAF", "PIK3CA")) {
+  geneVar <- paste0(gene, "_mut")
+  
+  cat("Fitting AFT model for", gene, "...\n")
+  
+  aft_model <- survreg(
+    as.formula(paste(
+      "Surv(OS_time, OS_event) ~", geneVar, 
+      "+ moa_consolidated +", geneVar, ":moa_consolidated",
+      "+ CURRENT_AGE_DEID + ageSquared + GENDER + RACE + STAGE_HIGHEST_RECORDED",
+      "+ logMSI + logTMB + logMSISquared + logTMBSquared"
+    )),
+    data = survDF,
+    dist = "weibull"
+  )
+  
+  aft_summary <- summary(aft_model)
+  
+  # Check column names
+  cat("Column names in aft_summary$table:\n")
+  print(colnames(aft_summary$table))
+  cat("\n")
+  
+  # Extract interaction coefficients - extract by column position instead
+  int_coefs_df <- as.data.frame(aft_summary$table) |>
+    rownames_to_column("Variable") |>
+    filter(str_detect(Variable, ":moa_consolidated"))
+  
+  if (nrow(int_coefs_df) > 0) {
+    # Extract columns by position: Value (1), Std. Error (2), z-value (3), p-value (4)
+    int_coefs <- int_coefs_df |>
+      mutate(
+        Gene = gene,
+        AFT_Coef = int_coefs_df[[2]],  # Value column
+        SE = int_coefs_df[[3]],  # Std. Error column
+        P_value = int_coefs_df[[5]],  # p-value column (usually 5th)
+        HR_equiv = exp(-AFT_Coef)
+      ) |>
+      select(Gene, Variable, AFT_Coef, HR_equiv, P_value)
+    
+    aft_results <- bind_rows(aft_results, int_coefs)
+    
+    # Compare to Cox
+    cox_model <- uniRes_improved[[gene]]$model
+    cox_p <- summary(cox_model)$coefficients[grep(":moa", rownames(summary(cox_model)$coefficients)), "Pr(>|z|)"]
+    
+    cat("Gene:", gene, "\n")
+    cat("  Cox interaction p-values:", round(cox_p, 4), "\n")
+    cat("  AFT interaction p-values:", round(int_coefs$P_value, 4), "\n\n")
+  }
+}
+
+# Display comparison table
+cat("\n=== AFT vs COX COMPARISON ===\n")
+if (nrow(aft_results) > 0) {
+  aft_results |>
+    mutate(
+      HR_equiv = round(HR_equiv, 3),
+      P_value = round(P_value, 4)
+    ) |>
+    select(Gene, Variable, HR_equiv, P_value) |>
+    arrange(Gene) |>
+    gt() |>
+    tab_header(
+      title = "Comparison: AFT vs Cox Models",
+      subtitle = "Robustness check for PH assumption violations"
+    ) |>
+    tab_source_note("HR_equiv = Weibull AFT coefficient converted to hazard ratio scale for comparison.")
+} else {
+  cat("No AFT results available.\n")
+}
+```
+
+
+## Subgroup Forest Plot: All Genes × Treatments
+
+```{r Subgroup Forest Plot}
+#| fig-width: 13
+#| fig-height: 9
+
+# Create forest plot data
+forest_data <- stratHR |>
+  mutate(
+    Gene = str_remove(Gene, "_mut"),
+    Label = paste0(Gene, " (", Treatment, ")")
+  ) |>
+  arrange(HR) |>
+  mutate(Label = fct_inorder(Label))
+
+# Plot
+p_forest <- forest_data |>
+  ggplot(aes(y = Label, x = HR)) +
+  geom_point(size = 3, color = "#1f77b4", alpha = 0.7) +
+  geom_errorbarh(aes(xmin = CI_lower, xmax = CI_upper), 
+                 height = 0.2, size = 0.8, color = "#1f77b4") +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "red", size = 1) +
+  scale_x_log10(breaks = c(0.5, 1, 2, 4)) +
+  labs(
+    title = "Subgroup Analysis: Mutation Effects by Treatment Group",
+    x = "Hazard Ratio (log scale, 95% CI)",
+    y = "Gene × Treatment Combination",
+    subtitle = "Positive: worse survival with mutation; <1: better survival with mutation"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 9),
+    plot.title = element_text(face = "bold", size = 13),
+    panel.grid.major.x = element_line(color = "lightgray", size = 0.3)
+  )
+
+print(p_forest)
+```
+
+
+
+```{r report table and figure making}
+
+# ============================================================
+# TABLE 1
+# ============================================================
+survDF |>
+  mutate(
+    moa_consolidated = factor(moa_consolidated, 
+                               levels = c("Chemo", "Chemo+Targeted", "Other/IO")),
+    GENDER = factor(GENDER),
+    RACE = factor(RACE),
+    STAGE_HIGHEST_RECORDED = factor(STAGE_HIGHEST_RECORDED)
+  ) |>
+  dplyr::select(
+    moa_consolidated,
+    CURRENT_AGE_DEID, GENDER, RACE, STAGE_HIGHEST_RECORDED,
+    MSI_SCORE, TMB_NONSYNONYMOUS,
+    TP53_mut, APC_mut, KRAS_mut, SMAD4_mut, PIK3CA_mut,
+    TCF7L2_mut, FBXW7_mut, SOX9_mut, BRAF_mut, ARID1A_mut
+  ) |>
+  tbl_summary(
+    by = moa_consolidated,
+    label = list(
+      CURRENT_AGE_DEID ~ "Age at Diagnosis",
+      GENDER ~ "Sex",
+      RACE ~ "Race",
+      STAGE_HIGHEST_RECORDED ~ "Highest Stage",
+      MSI_SCORE ~ "MSI Score",
+      TMB_NONSYNONYMOUS ~ "TMB (Non-Synonymous)",
+      TP53_mut ~ "TP53 Mutant, n (%)",
+      APC_mut ~ "APC Mutant, n (%)",
+      KRAS_mut ~ "KRAS Mutant, n (%)",
+      SMAD4_mut ~ "SMAD4 Mutant, n (%)",
+      PIK3CA_mut ~ "PIK3CA Mutant, n (%)",
+      TCF7L2_mut ~ "TCF7L2 Mutant, n (%)",
+      FBXW7_mut ~ "FBXW7 Mutant, n (%)",
+      SOX9_mut ~ "SOX9 Mutant, n (%)",
+      BRAF_mut ~ "BRAF Mutant, n (%)",
+      ARID1A_mut ~ "ARID1A Mutant, n (%)"
+    ),
+    statistic = list(
+      all_continuous() ~ "{median} ({p25}, {p75})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    missing = "no"
+  ) |>
+  add_overall() |>
+  add_p() |>
+  bold_labels() |>
+  modify_caption("**Table 1. Baseline Characteristics by First-Line Treatment Group**") |>
+  as_gt() |>
+  tab_options(
+    table.font.size = px(9),
+    table.width = pct(100),
+    column_labels.font.size = px(9),
+    heading.title.font.size = px(11),
+    heading.subtitle.font.size = px(9),
+    data_row.padding = px(2)
+  )
+
+# ============================================================
+# TABLE 2
+# ============================================================
+chemo_results <- stratHR |>
+  filter(Treatment == "Chemo") |>
+  mutate(
+    `HR (95% CI)` = paste0(
+      round(HR, 2), " (",
+      round(CI_lower, 2), "\u2013",
+      round(CI_upper, 2), ")"
+    ),
+    `P-value` = case_when(
+      P_value < 0.001 ~ "<0.001",
+      TRUE ~ as.character(round(P_value, 3))
+    ),
+    Significant = ifelse(P_value < 0.05, "*", "")
+  ) |>
+  arrange(P_value) |>
+  dplyr::select(Gene, `HR (95% CI)`, `P-value`, Significant, P_value)
+
+chemo_results |>
+  dplyr::select(Gene, `HR (95% CI)`, `P-value`, Significant) |>
+  gt() |>
+  tab_header(
+    title = "Table 2. Cox PH Results: Chemotherapy Group",
+    subtitle = "Adjusted for age, sex, race, stage, logMSI, logTMB"
+  ) |>
+  cols_label(
+    Gene = "Gene",
+    `HR (95% CI)` = "HR (95% CI)",
+    `P-value` = "P-value",
+    Significant = ""
+  ) |>
+  tab_footnote(
+    footnote = "HR > 1 = worse OS in mutation carriers. * p < 0.05.",
+    locations = cells_column_labels(columns = `HR (95% CI)`)
+  ) |>
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_body(rows = chemo_results$P_value < 0.05)
+  ) |>
+  tab_options(
+    table.font.size = px(10),
+    table.width = pct(70),
+    heading.title.font.size = px(11),
+    heading.subtitle.font.size = px(9),
+    data_row.padding = px(3)
+  ) |>
+  opt_stylize(style = 2)
+
+# ============================================================
+# FIGURE 1 — Forest Plot of Gene x MoA Interaction HRs
+# ============================================================
+forest_ix <- ixTab |>
+  mutate(
+    Treatment = case_when(
+      str_detect(Interaction_Term, "Chemo\\+Targeted") ~ "Chemo + Targeted",
+      str_detect(Interaction_Term, "Other") ~ "Other/IO",
+      TRUE ~ "Other"
+    ),
+    Label = paste0(Gene, " \u00d7 ", Treatment),
+    FDR_label = paste0("p=", round(P_value, 3),
+                        "\n(FDR p=", round(P_value_fdr, 3), ")")
+  ) |>
+  arrange(HR) |>
+  mutate(Label = fct_inorder(Label))
+
+ggplot(forest_ix, aes(y = Label, x = HR, color = Treatment)) +
+  geom_point(size = 3) +
+  geom_errorbar(
+    aes(xmin = CI_lower, xmax = CI_upper),
+    width = 0.25, linewidth = 0.8,
+    orientation = "y"
+  ) +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "gray40", linewidth = 0.9) +
+  geom_text(
+    aes(label = FDR_label, x = pmax(CI_upper, HR) + 0.05),
+    hjust = 0, size = 2.8, color = "gray30"
+  ) +
+  scale_x_log10(
+    breaks = c(0.25, 0.5, 1, 2, 4, 8),
+    labels = c("0.25", "0.5", "1", "2", "4", "8")
+  ) +
+  scale_color_manual(values = c("Chemo + Targeted" = "#1f77b4", "Other/IO" = "#ff7f0e")) +
+  labs(
+    title = "Figure 1. Forest Plot of Gene \u00d7 Treatment Interaction Hazard Ratios",
+    subtitle = "Reference group: Cytotoxic Chemotherapy. Dashed line = null (HR = 1).",
+    x = "Interaction Hazard Ratio (log scale, 95% CI)",
+    y = "Gene \u00d7 Treatment Interaction",
+    color = "Treatment Group",
+    caption = "FDR correction applied using Benjamini-Hochberg method across 20 tests."
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold"),
+    axis.text.y = element_text(size = 10),
+    plot.caption = element_text(size = 9, color = "gray40")
+  ) +
+  coord_cartesian(clip = "off") +
+  theme(plot.margin = margin(r = 100))
+
+# ============================================================
+# FIGURE 2 — KM Curves: BRAF and APC in Chemotherapy Group
+# ============================================================
+survDF_chemo <- survDF |>
+  filter(moa_consolidated == "Chemo") |>
+  mutate(
+    BRAF_label = ifelse(BRAF_mut == 1, "BRAF Mutant", "BRAF Wildtype"),
+    APC_label  = ifelse(APC_mut == 1,  "APC Mutant",  "APC Wildtype")
+  )
+
+fit_braf_chemo <- survfit(Surv(OS_time, OS_event) ~ BRAF_label, data = survDF_chemo)
+
+p_braf_chemo <- ggsurvplot(
+  fit_braf_chemo,
+  data = survDF_chemo,
+  risk.table = TRUE,
+  pval = TRUE,
+  conf.int = TRUE,
+  palette = c("#d62728", "#aec7e8"),
+  title = "BRAF Mutation Status \u2014 Chemotherapy Group",
+  xlab = "Months from First-Line Treatment Start",
+  ylab = "Overall Survival Probability",
+  legend.title = "",
+  legend.labs = c("BRAF Mutant", "BRAF Wildtype"),
+  ggtheme = theme_minimal(base_size = 12),
+  risk.table.height = 0.28,
+  tables.theme = theme_cleantable()
+)
+
+fit_apc_chemo <- survfit(Surv(OS_time, OS_event) ~ APC_label, data = survDF_chemo)
+
+p_apc_chemo <- ggsurvplot(
+  fit_apc_chemo,
+  data = survDF_chemo,
+  risk.table = TRUE,
+  pval = TRUE,
+  conf.int = TRUE,
+  palette = c("#2ca02c", "#98df8a"),
+  title = "APC Mutation Status \u2014 Chemotherapy Group",
+  xlab = "Months from First-Line Treatment Start",
+  ylab = "Overall Survival Probability",
+  legend.title = "",
+  legend.labs = c("APC Mutant", "APC Wildtype"),
+  ggtheme = theme_minimal(base_size = 12),
+  risk.table.height = 0.28,
+  tables.theme = theme_cleantable()
+)
+
+arrange_ggsurvplots(
+  list(p_braf_chemo, p_apc_chemo),
+  ncol = 2,
+  title = "Figure 2. Kaplan-Meier Curves by Mutation Status in the Chemotherapy Group"
+)
+
+# ============================================================
+# FIGURE 3 — Landmark Analysis + Bootstrap for PIK3CA
+# ============================================================
+pik3ca_landmark <- landmark_results |>
+  filter(Gene == "PIK3CA") |>
+  mutate(
+    Treatment = case_when(
+      str_detect(Variable, "Chemo\\+Targeted") ~ "Chemo + Targeted",
+      str_detect(Variable, "Other")            ~ "Other/IO",
+      TRUE ~ "Unknown"
+    ),
+    Period = factor(Period, levels = c("Early", "Late")),
+    sig_label = case_when(
+      P_value_fdr < 0.05 ~ paste0("FDR p=", round(P_value_fdr, 3), " *"),
+      P_value < 0.05     ~ paste0("p=", round(P_value, 3), " (FDR p=", round(P_value_fdr, 3), ")"),
+      TRUE               ~ paste0("p=", round(P_value, 3))
+    )
+  )
+
+p_landmark <- ggplot(pik3ca_landmark,
+                     aes(x = Period, y = HR, color = Treatment, group = Treatment)) +
+  geom_point(size = 4) +
+  geom_line(linewidth = 1.1, linetype = "dashed") +
+  geom_errorbar(aes(ymin = CI_lower, ymax = CI_upper), width = 0.12, linewidth = 0.9) +
+  geom_text(aes(label = sig_label), vjust = -1.2, size = 3.2) +
+  geom_hline(yintercept = 1, linetype = "dotted", color = "gray50") +
+  scale_color_manual(values = c("Chemo + Targeted" = "#1f77b4", "Other/IO" = "#ff7f0e")) +
+  scale_y_log10() +
+  labs(
+    title = "A. PIK3CA \u00d7 Treatment \u2014 Landmark Analysis",
+    x = "Follow-Up Period (Split at Median: 35.5 Months)",
+    y = "Interaction HR (log scale, 95% CI)",
+    color = "Treatment"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(plot.title = element_text(face = "bold"), legend.position = "bottom")
+
+pik3ca_boot <- boot_ci_all_genes |>
+  filter(Gene == "PIK3CA") |>
+  mutate(
+    Treatment = case_when(
+      str_detect(Interaction, "Chemo.Targeted") ~ "Chemo + Targeted",
+      str_detect(Interaction, "Other")          ~ "Other/IO",
+      TRUE ~ Interaction
+    )
+  )
+
+p_boot <- ggplot(pik3ca_boot, aes(y = Treatment, x = `Point HR`, color = Robust)) +
+  geom_point(size = 4) +
+  geom_errorbar(
+    aes(xmin = `CI Lower`, xmax = `CI Upper`),
+    width = 0.2, linewidth = 0.9,
+    orientation = "y"
+  ) +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "gray40", linewidth = 0.9) +
+  scale_color_manual(values = c("YES" = "#d62728", "NO" = "#aec7e8"),
+                     labels = c("YES" = "Robust (CI excludes 1)", "NO" = "Not robust")) +
+  labs(
+    title = "B. PIK3CA \u2014 Bootstrap Validation (250 Resamples)",
+    x = "Interaction HR (95% Bootstrapped CI)",
+    y = "Treatment Comparison",
+    color = "Robustness"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(plot.title = element_text(face = "bold"), legend.position = "bottom")
+
+library(patchwork)
+p_landmark + p_boot +
+  plot_annotation(
+    title = "Figure 3. PIK3CA \u00d7 Chemo+Targeted: Landmark Analysis and Bootstrap Validation",
+    caption = "Left: Interaction HRs by landmark period; * = FDR p < 0.05. Right: Bootstrap 95% CIs from 250 resamples.",
+    theme = theme(plot.title = element_text(face = "bold", size = 13))
+  )
+
+# ============================================================
+# TABLE 3 — RMST (add APC first, then display)
+# ============================================================
+for (moa_group in unique(survDF$moa_consolidated)) {
+  df_subset <- survDF |> filter(moa_consolidated == moa_group, !is.na(APC_mut))
+  if (nrow(df_subset) < 10) next
+  tau_apc <- min(
+    max(df_subset$OS_time[df_subset$APC_mut == 1], na.rm = TRUE),
+    max(df_subset$OS_time[df_subset$APC_mut == 0], na.rm = TRUE)
+  ) * 0.9
+  if (tau_apc <= 0) next
+  r <- rmst2(df_subset$OS_time, df_subset$OS_event, df_subset$APC_mut, tau = tau_apc)
+  rmst_results <- bind_rows(rmst_results, tibble(
+    Gene = "APC", Treatment = moa_group,
+    Tau_Months = round(tau_apc, 1),
+    RMST_Diff = r$unadjusted.result[1, 1],
+    RMST_SE   = r$unadjusted.result[1, 2],
+    P_value   = r$unadjusted.result[1, 4]
+  ))
+}
+
+rmst_results |>
+  filter(Gene %in% c("APC", "BRAF", "PIK3CA")) |>
+  mutate(
+    `RMST Diff (mo.)` = round(RMST_Diff, 2),
+    `95% CI` = paste0(
+      round(RMST_Diff - 1.96 * RMST_SE, 2), " to ",
+      round(RMST_Diff + 1.96 * RMST_SE, 2)
+    ),
+    `P-value` = case_when(P_value < 0.001 ~ "<0.001", TRUE ~ as.character(round(P_value, 3))),
+    Gene = factor(Gene, levels = c("BRAF", "PIK3CA", "APC"))
+  ) |>
+  arrange(Gene, Treatment) |>
+  dplyr::select(Gene, Treatment, Tau_Months, `RMST Diff (mo.)`, `95% CI`, `P-value`) |>
+  gt() |>
+  tab_header(
+    title = "Table 3. RMST Analysis",
+    subtitle = "Mutant vs. Wildtype by treatment group"
+  ) |>
+  cols_label(
+    Tau_Months = "Tau (mo.)",
+    `RMST Diff (mo.)` = "RMST Diff (mo.)",
+    `95% CI` = "95% CI",
+    `P-value` = "P-value"
+  ) |>
+  tab_footnote(
+    footnote = "Diff = Mutant \u2212 Wildtype. Negative = worse OS in mutation carriers. Tau = 90% of minimum arm max follow-up.",
+    locations = cells_column_labels(columns = `RMST Diff (mo.)`)
+  ) |>
+  tab_row_group(label = "BRAF",   rows = Gene == "BRAF")   |>
+  tab_row_group(label = "PIK3CA", rows = Gene == "PIK3CA") |>
+  tab_row_group(label = "APC",    rows = Gene == "APC")    |>
+  tab_options(
+    table.font.size = px(9),
+    table.width = pct(95),
+    heading.title.font.size = px(11),
+    heading.subtitle.font.size = px(9),
+    column_labels.font.size = px(9),
+    data_row.padding = px(2),
+    row_group.font.weight = "bold"
+  ) |>
+  opt_stylize(style = 2)
+  
+```
+
+
+```{r figures try again}
+
+# ============================================================
+# FIGURE 1 — Forest Plot of Gene x MoA Interaction HRs
+# ============================================================
+#| fig-width: 14
+#| fig-height: 10
+
+library(ggrepel)
+
+forest_ix <- ixTab |>
+  mutate(
+    Treatment = case_when(
+      str_detect(Interaction_Term, "Chemo\\+Targeted") ~ "Chemo + Targeted",
+      str_detect(Interaction_Term, "Other") ~ "Other/IO",
+      TRUE ~ "Other"
+    ),
+    Label = paste0(Gene, " \u00d7 ", Treatment),
+    FDR_label = paste0("p=", round(P_value, 3),
+                       "  FDR p=", round(P_value_fdr, 3))
+  ) |>
+  arrange(HR) |>
+  mutate(Label = fct_inorder(Label))
+
+ggplot(forest_ix, aes(y = Label, x = HR, color = Treatment)) +
+  geom_point(size = 3) +
+  geom_errorbar(
+    aes(xmin = CI_lower, xmax = CI_upper),
+    width = 0.4,
+    linewidth = 0.8,
+    orientation = "y"
+  ) +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "gray40", linewidth = 0.9) +
+  geom_text(
+    aes(label = FDR_label, x = CI_upper + 0.1),
+    hjust = 0,
+    size = 2.6,
+    color = "gray30"
+  ) +
+  scale_x_log10(
+    breaks = c(0.25, 0.5, 1, 2, 4, 8),
+    labels = c("0.25", "0.5", "1", "2", "4", "8"),
+    limits = c(0.1, 20)
+  ) +
+  scale_color_manual(values = c("Chemo + Targeted" = "#1f77b4", "Other/IO" = "#ff7f0e")) +
+  labs(
+    title = "Figure 1. Forest Plot of Gene \u00d7 Treatment Interaction Hazard Ratios",
+    subtitle = "Reference group: Cytotoxic Chemotherapy. Dashed line = null (HR = 1).",
+    x = "Interaction Hazard Ratio (log scale, 95% CI)",
+    y = "Gene \u00d7 Treatment Interaction",
+    color = "Treatment Group",
+    caption = "FDR correction applied using Benjamini-Hochberg method across 20 tests."
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 12),
+    axis.text.y = element_text(size = 9),
+    axis.text.x = element_text(size = 9),
+    plot.caption = element_text(size = 8, color = "gray40"),
+    plot.margin = margin(t = 10, r = 160, b = 10, l = 10),
+    panel.grid.minor = element_blank()
+  ) +
+  coord_cartesian(clip = "off")
+
+# ============================================================
+# FIGURE 2 — KM Curves: BRAF and APC in Chemotherapy Group
+# ============================================================
+#| fig-width: 16
+#| fig-height: 8
+
+survDF_chemo <- survDF |>
+  filter(moa_consolidated == "Chemo") |>
+  mutate(
+    BRAF_label = ifelse(BRAF_mut == 1, "BRAF Mutant", "BRAF Wildtype"),
+    APC_label  = ifelse(APC_mut == 1,  "APC Mutant",  "APC Wildtype")
+  )
+
+fit_braf_chemo <- survfit(Surv(OS_time, OS_event) ~ BRAF_label, data = survDF_chemo)
+
+p_braf_chemo <- ggsurvplot(
+  fit_braf_chemo,
+  data = survDF_chemo,
+  risk.table = TRUE,
+  pval = TRUE,
+  pval.size = 4,
+  conf.int = TRUE,
+  palette = c("#d62728", "#aec7e8"),
+  title = "BRAF Mutation \u2014 Chemotherapy",
+  xlab = "Months from First-Line Treatment Start",
+  ylab = "Overall Survival Probability",
+  legend.title = "",
+  legend.labs = c("BRAF Mutant", "BRAF Wildtype"),
+  ggtheme = theme_minimal(base_size = 11),
+  font.main = c(11, "bold"),
+  font.x = c(10, "plain"),
+  font.y = c(10, "plain"),
+  font.tickslab = c(9, "plain"),
+  font.legend = c(9, "plain"),
+  risk.table.height = 0.25,
+  risk.table.fontsize = 3,
+  tables.theme = theme_cleantable(),
+  break.time.by = 50,
+  xlim = c(0, 400)
+)
+
+fit_apc_chemo <- survfit(Surv(OS_time, OS_event) ~ APC_label, data = survDF_chemo)
+
+p_apc_chemo <- ggsurvplot(
+  fit_apc_chemo,
+  data = survDF_chemo,
+  risk.table = TRUE,
+  pval = TRUE,
+  pval.size = 4,
+  conf.int = TRUE,
+  palette = c("#2ca02c", "#98df8a"),
+  title = "APC Mutation \u2014 Chemotherapy",
+  xlab = "Months from First-Line Treatment Start",
+  ylab = "Overall Survival Probability",
+  legend.title = "",
+  legend.labs = c("APC Mutant", "APC Wildtype"),
+  ggtheme = theme_minimal(base_size = 11),
+  font.main = c(11, "bold"),
+  font.x = c(10, "plain"),
+  font.y = c(10, "plain"),
+  font.tickslab = c(9, "plain"),
+  font.legend = c(9, "plain"),
+  risk.table.height = 0.25,
+  risk.table.fontsize = 3,
+  tables.theme = theme_cleantable(),
+  break.time.by = 50,
+  xlim = c(0, 400)
+)
+
+arrange_ggsurvplots(
+  list(p_braf_chemo, p_apc_chemo),
+  ncol = 2,
+  nrow = 1,
+  title = "Figure 2. Kaplan-Meier Curves by Mutation Status in the Chemotherapy Group",
+  print = TRUE
+)
+
+# ============================================================
+# FIGURE 3 — Landmark Analysis + Bootstrap for PIK3CA
+# ============================================================
+#| fig-width: 14
+#| fig-height: 6
+
+pik3ca_landmark <- landmark_results |>
+  filter(Gene == "PIK3CA") |>
+  mutate(
+    Treatment = case_when(
+      str_detect(Variable, "Chemo\\+Targeted") ~ "Chemo + Targeted",
+      str_detect(Variable, "Other")            ~ "Other/IO",
+      TRUE ~ "Unknown"
+    ),
+    Period = factor(Period, levels = c("Early", "Late")),
+    sig_label = case_when(
+      P_value_fdr < 0.05 ~ paste0("FDR p=", round(P_value_fdr, 3), " *"),
+      P_value < 0.05     ~ paste0("p=", round(P_value, 3),
+                                   "\n(FDR p=", round(P_value_fdr, 3), ")"),
+      TRUE               ~ paste0("p=", round(P_value, 3))
+    )
+  )
+
+p_landmark <- ggplot(pik3ca_landmark,
+                     aes(x = Period, y = HR, color = Treatment, group = Treatment)) +
+  geom_point(size = 3.5) +
+  geom_line(linewidth = 1.0, linetype = "dashed") +
+  geom_errorbar(aes(ymin = CI_lower, ymax = CI_upper),
+                width = 0.10, linewidth = 0.8) +
+  geom_text(
+    aes(label = sig_label),
+    vjust = -1.0,
+    size = 3.0,
+    lineheight = 0.9
+  ) +
+  geom_hline(yintercept = 1, linetype = "dotted", color = "gray50") +
+  scale_color_manual(values = c("Chemo + Targeted" = "#1f77b4",
+                                "Other/IO" = "#ff7f0e")) +
+  scale_y_log10(
+    breaks = c(0.1, 0.5, 1, 5, 10, 50, 100),
+    labels = c("0.1", "0.5", "1", "5", "10", "50", "100"),
+    limits = c(0.04, 200)
+  ) +
+  expand_limits(y = c(0.04, 200)) +
+  labs(
+    title = "A. PIK3CA \u00d7 Treatment \u2014 Landmark Analysis",
+    x = "Follow-Up Period (Split at Median: 35.5 Months)",
+    y = "Interaction HR (log scale, 95% CI)",
+    color = "Treatment"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    plot.title = element_text(face = "bold", size = 11),
+    legend.position = "bottom",
+    legend.text = element_text(size = 9),
+    axis.text = element_text(size = 9),
+    plot.margin = margin(t = 20, r = 10, b = 10, l = 10)
+  )
+
+pik3ca_boot <- boot_ci_all_genes |>
+  filter(Gene == "PIK3CA") |>
+  mutate(
+    Treatment = case_when(
+      str_detect(Interaction, "Chemo.Targeted") ~ "Chemo + Targeted",
+      str_detect(Interaction, "Other")          ~ "Other/IO",
+      TRUE ~ Interaction
+    )
+  )
+
+p_boot <- ggplot(pik3ca_boot,
+                 aes(y = Treatment, x = `Point HR`, color = Robust)) +
+  geom_point(size = 3.5) +
+  geom_errorbar(
+    aes(xmin = `CI Lower`, xmax = `CI Upper`),
+    width = 0.2,
+    linewidth = 0.9,
+    orientation = "y"
+  ) +
+  geom_vline(xintercept = 1, linetype = "dashed",
+             color = "gray40", linewidth = 0.9) +
+  scale_color_manual(
+    values = c("YES" = "#d62728", "NO" = "#aec7e8"),
+    labels = c("YES" = "Robust (CI excludes 1)", "NO" = "Not robust")
+  ) +
+  labs(
+    title = "B. PIK3CA \u2014 Bootstrap Validation (250 Resamples)",
+    x = "Interaction HR (95% Bootstrapped CI)",
+    y = "Treatment Comparison",
+    color = "Robustness"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    plot.title = element_text(face = "bold", size = 11),
+    legend.position = "bottom",
+    legend.text = element_text(size = 9),
+    axis.text = element_text(size = 9),
+    plot.margin = margin(t = 20, r = 10, b = 10, l = 10)
+  )
+
+library(patchwork)
+p_landmark + p_boot +
+  plot_layout(widths = c(1.2, 1)) +
+  plot_annotation(
+    title = "Figure 3. PIK3CA \u00d7 Chemo+Targeted: Landmark Analysis and Bootstrap Validation",
+    caption = paste0("Left: Interaction HRs by landmark period; * = FDR p < 0.05.\n",
+                     "Right: Bootstrap 95% CIs from 250 resamples."),
+    theme = theme(
+      plot.title = element_text(face = "bold", size = 12),
+      plot.caption = element_text(size = 8, color = "gray40")
+    )
+  )
+
+
+
+
+
+
+
+#| fig-width: 14
+#| fig-height: 8
+
+library(broom)
+
+survDF_pik3ca <- survDF |>
+  mutate(
+    PIK3CA_Status = ifelse(PIK3CA_mut == 1, "Mutant", "Wildtype"),
+    Group = paste0("PIK3CA ", PIK3CA_Status, "\n", moa_consolidated)
+  )
+
+fit_pik3ca <- survfit(Surv(OS_time, OS_event) ~ Group, data = survDF_pik3ca)
+
+# tidy the survfit object
+km_df <- tidy(fit_pik3ca) |>
+  mutate(
+    strata = str_remove(strata, "Group="),
+    strata = factor(strata)
+  )
+
+# color palette for 6 groups
+pal6 <- c(
+  "PIK3CA Mutant\nChemo"          = "#d62728",
+  "PIK3CA Mutant\nChemo+Targeted" = "#ff7f0e",
+  "PIK3CA Mutant\nOther/IO"       = "#9467bd",
+  "PIK3CA Wildtype\nChemo"        = "#1f77b4",
+  "PIK3CA Wildtype\nChemo+Targeted" = "#2ca02c",
+  "PIK3CA Wildtype\nOther/IO"     = "#8c564b"
+)
+
+# clean labels for legend (replace \n with space)
+km_df <- km_df |>
+  mutate(strata_label = str_replace(strata, "\n", " | "))
+
+pal6_clean <- setNames(pal6, str_replace(names(pal6), "\n", " | "))
+
+p_pik3ca_manual <- ggplot(km_df, aes(x = time, y = estimate,
+                                      color = strata_label,
+                                      fill = strata_label)) +
+  geom_step(linewidth = 0.9) +
+  geom_ribbon(
+    aes(ymin = conf.low, ymax = conf.high),
+    alpha = 0.12, color = NA
+  ) +
+  scale_color_manual(values = pal6_clean, name = "Group") +
+  scale_fill_manual(values = pal6_clean, name = "Group") +
+  scale_x_continuous(
+    breaks = seq(0, 400, by = 50),
+    limits = c(0, 420)
+  ) +
+  scale_y_continuous(
+    limits = c(0, 1),
+    breaks = seq(0, 1, by = 0.25),
+    labels = c("0.00", "0.25", "0.50", "0.75", "1.00")
+  ) +
+  labs(
+    title = "Kaplan-Meier: Overall Survival by PIK3CA Mutation Status and Treatment",
+    x = "Months from Treatment Start",
+    y = "Overall Survival Probability"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", size = 12),
+    legend.position = "right",
+    legend.title = element_text(size = 10, face = "bold"),
+    legend.text = element_text(size = 9),
+    legend.key.height = unit(1.2, "cm"),
+    legend.spacing.y = unit(0.3, "cm"),
+    axis.text = element_text(size = 10),
+    axis.title = element_text(size = 11),
+    panel.grid.minor = element_blank(),
+    plot.margin = margin(t = 10, r = 10, b = 10, l = 10)
+  ) +
+  guides(
+    color = guide_legend(override.aes = list(linewidth = 2)),
+    fill = "none"
+  )
+
+print(p_pik3ca_manual)
+```
